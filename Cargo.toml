@@ -21,6 +21,10 @@ harness = false
 # GUI — eframe/egui: framework immediate-mode nativo, fijado por Plan.md.
 eframe = "0.35"
 egui = "0.35"
+# Diálogo de archivos nativo (abrir imágenes) — justificación: estándar en el
+# ecosistema egui, nativo por plataforma, mantenido, licencia MIT/Apache-2.0
+# (AGENTS.md §7.2).
+rfd = "0.15"
 # Decodificación de imágenes — justificación: benchmark base y Fase 1.
 image = "0.25"
 # Serialización de configuración TOML.
