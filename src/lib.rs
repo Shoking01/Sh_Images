@@ -4,6 +4,7 @@
 //! (`main.rs`). Esto permite tests de integración y benchmarks sobre la lógica
 //! sin acoplar a la UI.
 
+pub mod app;
 pub mod config;
 pub mod core;
 pub mod ui;

@@ -7,9 +7,9 @@ edition = "2021"
 name = "sh_images"
 path = "src/lib.rs"
 
-# [[bin]]
-# name = "sh_images"
-# path = "src/main.rs"
+[[bin]]
+name = "sh_images"
+path = "src/main.rs"
 
 # [[bench]]
 # name = "opening"
