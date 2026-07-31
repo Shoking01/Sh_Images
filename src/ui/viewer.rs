@@ -36,11 +36,14 @@ pub fn show(
     ui.painter()
         .rect_filled(rect, 0.0, egui::Color32::from_gray(24));
 
-    // Rectángulo de la imagen en pantalla.
+    // Rectángulo de la imagen en pantalla (origin es relativo al canvas).
     let origin = transform.image_origin_screen();
     let w = transform.image_size.x * transform.zoom;
     let h = transform.image_size.y * transform.zoom;
-    let image_rect = egui::Rect::from_min_size(egui::pos2(origin.x, origin.y), egui::vec2(w, h));
+    let image_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.min.x + origin.x, rect.min.y + origin.y),
+        egui::vec2(w, h),
+    );
 
     ui.painter().image(
         texture.id(),
@@ -55,9 +58,10 @@ pub fn show(
     if response.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
-            let anchor = response.hover_pos().unwrap_or_else(|| rect.center());
+            let anchor_screen = response.hover_pos().unwrap_or_else(|| rect.center());
+            let anchor = Vec2::new(anchor_screen.x - rect.min.x, anchor_screen.y - rect.min.y);
             let factor = (scroll * 0.001).exp();
-            transform.apply_zoom_at(Vec2::new(anchor.x, anchor.y), factor);
+            transform.apply_zoom_at(anchor, factor);
             result.zoomed = true;
             ui.ctx().request_repaint();
         }

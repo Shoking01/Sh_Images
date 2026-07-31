@@ -7,13 +7,17 @@ use std::ops::{Add, Div, Mul, Sub};
 /// Vector/posición 2D mínimo del módulo core.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vec2 {
+    /// Componente horizontal.
     pub x: f32,
+    /// Componente vertical.
     pub y: f32,
 }
 
 impl Vec2 {
+    /// El vector (0, 0).
     pub const ZERO: Vec2 = Vec2 { x: 0.0, y: 0.0 };
 
+    /// Crea un vector con los componentes dados.
     pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
@@ -53,9 +57,13 @@ pub const MAX_ZOOM: f32 = 8.0;
 /// Transformación de vista: escala y desplazamiento de la imagen en el canvas.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewTransform {
+    /// Factor de escala actual de la imagen (nunca por debajo de `fit_zoom`).
     pub zoom: f32,
+    /// Desplazamiento de la imagen respecto al centro del canvas.
     pub pan: Vec2,
+    /// Tamaño en píxeles de la imagen original.
     pub image_size: Vec2,
+    /// Tamaño del canvas (área visible) en píxeles de pantalla.
     pub viewport: Vec2,
 }
 
@@ -192,6 +200,15 @@ mod tests {
         let after = t.image_origin_screen();
         assert!(approx(after.x - before.x, 10.0));
         assert!(approx(after.y - before.y, -20.0));
+    }
+
+    #[test]
+    fn set_viewport_updates_canvas_size() {
+        let mut t = ViewTransform::new(Vec2::new(1000.0, 1000.0), Vec2::new(500.0, 500.0));
+        let fit_before = t.fit_zoom();
+        t.set_viewport(Vec2::new(250.0, 250.0));
+        assert_eq!(t.viewport, Vec2::new(250.0, 250.0));
+        assert!(approx(t.fit_zoom(), fit_before * 0.5));
     }
 
     #[test]

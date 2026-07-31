@@ -34,6 +34,8 @@ pub struct ShImagesApp {
     toasts: Toasts,
     /// `true` si el usuario ha hecho zoom/pan con la imagen actual.
     user_interacted: bool,
+    /// Último tamaño del canvas; se usa para re-fitear al redimensionar.
+    last_viewport: Option<Vec2>,
 }
 
 impl ShImagesApp {
@@ -58,6 +60,7 @@ impl ShImagesApp {
             rx: None,
             toasts: Toasts::new(),
             user_interacted: false,
+            last_viewport: None,
         }
     }
 
@@ -141,6 +144,7 @@ impl ShImagesApp {
                 self.transform =
                     ViewTransform::new(Vec2::new(size.0 as f32, size.1 as f32), Vec2::ZERO);
                 self.user_interacted = false;
+                self.last_viewport = None;
             }
             Err(e) => {
                 tracing::warn!(error = %e, path = %event.path.display(), "failed to load image");
@@ -220,6 +224,13 @@ impl eframe::App for ShImagesApp {
                     let resp = viewer::show(ui, texture, &mut self.transform);
                     if resp.zoomed || resp.panned {
                         self.user_interacted = true;
+                    }
+                    // Auto-fit: al cargar (viewport recién conocido) y al
+                    // redimensionar mientras el usuario no haya interactuado.
+                    let viewport = self.transform.viewport;
+                    if !self.user_interacted && self.last_viewport != Some(viewport) {
+                        self.transform.fit();
+                        self.last_viewport = Some(viewport);
                     }
                 }
                 None => {
