@@ -2,5 +2,6 @@
 
 pub mod sidebar;
 pub mod theme;
+pub mod toast;
 pub mod toolbar;
 pub mod viewer;
