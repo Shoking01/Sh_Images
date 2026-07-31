@@ -19,7 +19,6 @@ fn config_dir_with(
     home: Option<&OsStr>,
     xdg: Option<&OsStr>,
 ) -> Result<PathBuf> {
-    let appdata = appdata.filter(|s| !s.is_empty());
     let home = home.filter(|s| !s.is_empty());
     let xdg = xdg.filter(|s| !s.is_empty());
 
@@ -27,8 +26,9 @@ fn config_dir_with(
     {
         // Los parámetros home/xdg no aplican en Windows.
         let _ = (home, xdg);
-        let base =
-            appdata.ok_or_else(|| ShImagesError::Config("APPDATA is not set".to_string()))?;
+        let base = appdata
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ShImagesError::Config("APPDATA is not set".to_string()))?;
         Ok(PathBuf::from(base))
     }
     #[cfg(target_os = "macos")]
@@ -42,6 +42,8 @@ fn config_dir_with(
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
+        // El parámetro appdata no aplica en Linux.
+        let _ = appdata;
         if let Some(xdg) = xdg {
             return Ok(PathBuf::from(xdg));
         }
