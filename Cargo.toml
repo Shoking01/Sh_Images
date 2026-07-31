@@ -17,13 +17,13 @@ path = "src/lib.rs"
 
 [dependencies]
 # GUI — eframe/egui: framework inmediato-mode nativo, fijado por Plan.md.
-eframe = "0.31"
-egui = "0.31"
+eframe = "0.35"
+egui = "0.35"
 # Decodificación de imágenes — justificación: benchmark base y Fase 1.
 image = "0.25"
 # Serialización de configuración TOML.
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1"
 # Sistema de errores centralizado (AGENTS.md §3.3).
 thiserror = "2"
 # Logging estructurado (AGENTS.md §7.3).
