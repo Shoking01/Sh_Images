@@ -9,7 +9,7 @@ en la UI llega en Fase 1.
 
 ## Requisitos
 
-- Rust 1.80+ (stable)
+- Rust 1.92+ (stable)
 - Windows: `Visual C++ Redistributable` (requerido por `eframe`/`winit`)
 
 ## Uso

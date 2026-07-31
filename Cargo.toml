@@ -16,7 +16,7 @@ name = "opening"
 harness = false
 
 [dependencies]
-# GUI — eframe/egui: framework inmediato-mode nativo, fijado por Plan.md.
+# GUI — eframe/egui: framework immediate-mode nativo, fijado por Plan.md.
 eframe = "0.35"
 egui = "0.35"
 # Decodificación de imágenes — justificación: benchmark base y Fase 1.
