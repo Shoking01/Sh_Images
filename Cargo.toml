@@ -1,0 +1,39 @@
+[package]
+name = "sh_images"
+version = "0.1.0"
+edition = "2021"
+# MSRV: eframe/egui 0.35 requieren Rust 1.92 (ver ADR-005).
+rust-version = "1.92"
+
+[lib]
+name = "sh_images"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sh_images"
+path = "src/main.rs"
+
+[[bench]]
+name = "opening"
+harness = false
+
+[dependencies]
+# GUI — eframe/egui: framework immediate-mode nativo, fijado por Plan.md.
+eframe = "0.35"
+egui = "0.35"
+# Decodificación de imágenes — justificación: benchmark base y Fase 1.
+image = "0.25"
+# Serialización de configuración TOML.
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+# Sistema de errores centralizado (AGENTS.md §3.3).
+thiserror = "2"
+# Logging estructurado (AGENTS.md §7.3).
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+# Benchmarks de rendimiento.
+criterion = { version = "0.5", features = ["html_reports"] }
+# Archivos temporales en tests de I/O (AGENTS.md §4.3).
+tempfile = "3"

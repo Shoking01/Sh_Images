@@ -6,7 +6,7 @@
 
 **Architecture:** Crate con dos targets — `lib` (`src/lib.rs`, donde vive toda la lógica, evita `dead_code` en stubs y habilita tests/benchmarks) y `bin` (`src/main.rs`, wrapper fino). `ShImagesError` centralizado con `thiserror`. `Settings` TOML con load/save. `core::image_loader::load_image` decodifica con `image`. Stubs documentados en `core/` y `ui/`.
 
-**Tech Stack:** Rust 2021, `eframe`/`egui` 0.31, `image` 0.25, `thiserror` 2, `serde` 1 + `toml` 0.8, `tracing`/`tracing-subscriber` 0.1/0.3. Dev: `criterion` 0.5, `tempfile` 3.
+**Tech Stack:** Rust 2021, `eframe`/`egui` 0.35, `image` 0.25, `thiserror` 2, `serde` 1 + `toml` 1.x, `tracing`/`tracing-subscriber` 0.1/0.3. Dev: `criterion` 0.5, `tempfile` 3.
 
 **Spec:** `docs/superpowers/specs/2026-07-31-fase0-fundamentos-design.md`
 
@@ -73,13 +73,13 @@ harness = false
 
 [dependencies]
 # GUI — eframe/egui: framework inmediato-mode nativo, fijado por Plan.md.
-eframe = "0.31"
-egui = "0.31"
+eframe = "0.35"
+egui = "0.35"
 # Decodificación de imágenes — justificación: benchmark base y Fase 1.
 image = "0.25"
 # Serialización de configuración TOML.
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1"
 # Sistema de errores centralizado (AGENTS.md §3.3).
 thiserror = "2"
 # Logging estructurado (AGENTS.md §7.3).
@@ -92,6 +92,8 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # Archivos temporales en tests de I/O (AGENTS.md §4.3).
 tempfile = "3"
 ```
+
+> Actualización (2026-07-31): durante la revisión de Task 1 se subió la versión de `eframe`/`egui` a **0.35** y `toml` a **1.x** (la última estable), y se commiteó `Cargo.lock`. El código de egui en Tasks 7-8 usa API estable desde 0.31 (inmediato-mode), por lo que el plan no cambia en contenido; cualquier ajuste de API se resuelve en el compile de esos tasks.
 
 > Nota: `src/main.rs` aún no existe; cargo lo exige porque `[[bin]]` lo declara. Créalo en Task 8. Para que `cargo check` pase en este task, crea también un `src/main.rs` temporal vacío (lo sobreescribiremos en Task 8) — o comenta el `[[bin]]` hasta Task 8. Recomendado: comentar `[[bin]]` y `[[bench]]` ahora; se descomentan en sus tasks.
 
@@ -737,17 +739,9 @@ Crear `src/core/thumbnail_gen.rs`:
 
 ```rust
 //! Generación de miniaturas (implementación completa en Fase 2).
-
-/// Genera una miniatura de `width` píxeles a partir de la imagen dada.
-pub fn generate_thumbnail(
-    _image: &image::DynamicImage,
-    _width: u32,
-) -> image::DynamicImage {
-    unimplemented!("Fase 2")
-}
 ```
 
-> Atención: `unimplemented!` panica. Es un stub provisional; se marcará su implementación en Fase 2. Si `cargo clippy -- -D warnings` quejara por `unused_must_use` u otro, revisar. Este stub no se invoca en Fase 0, así que no hay riesgo en runtime.
+> Decisión de implementación (2026-07-31): `thumbnail_gen` queda como docstring de módulo únicamente. El plan original proponía un stub con `unimplemented!("Fase 2")`, pero eso es un panic en producción (AGENTS.md §2.1). La función `generate_thumbnail` se introducirá completa en Fase 2.
 
 Crear `src/core/navigation.rs`:
 
@@ -916,9 +910,9 @@ impl ShImagesApp {
 }
 
 impl eframe::App for ShImagesApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        theme::apply(ctx, &self.settings.theme);
-        egui::CentralPanel::default().show(ctx, |ui| {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        theme::apply(ui.ctx(), &self.settings.theme);
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.centered_and_justified(|ui| {
                 ui.heading("Sh_Images");
             });
@@ -926,6 +920,8 @@ impl eframe::App for ShImagesApp {
     }
 }
 ```
+
+> Actualización eframe 0.35 (2026-07-31): la versión 0.35 renombró `App::update(ctx, frame)` por `App::ui(&mut self, ui: &mut egui::Ui, frame)` (método requerido) y `CentralPanel::show` ahora toma `&mut Ui` en vez de `&egui::Context`. El código de arriba refleja el API real verificado contra `eframe-0.35.0` y `egui-0.35.0`. El patrón de anidar `CentralPanel` dentro del `Ui` de `App::ui` es el documentado por eframe (el `Ui` raíz no tiene fondo).
 
 - [ ] **Step 3: Crear `src/main.rs`**
 

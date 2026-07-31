@@ -20,6 +20,8 @@ base definidas. Todo el código debe adherirse a `AGENTS.md` (sin `unsafe`, sin
 - Dependencias: `eframe`, `egui`, `thiserror`, `serde`, `toml`, `tracing`,
   `tracing-subscriber`; dev-deps: `criterion`. También `image` (decidido en
   revisión) para el benchmark base de apertura.
+  (Actualizado 2026-07-31: `eframe`/`egui` en su línea estable actual `0.35`,
+  `toml` en `1.x`.)
 - Estructura de módulos completa como skeleton compilable (todo el árbol del
   `Plan.md` §3), con stubs documentados en `core/` y `ui/`.
 - Sistema de errores `ShImagesError` completo (real, no stub).
