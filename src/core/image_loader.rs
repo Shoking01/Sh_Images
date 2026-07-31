@@ -48,6 +48,17 @@ mod tests {
     }
 
     #[test]
+    fn decoding_valid_jpeg_returns_image() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("sample.jpg");
+        let img = load_image(&path).unwrap();
+        assert_eq!(img.width(), 16);
+        assert_eq!(img.height(), 16);
+    }
+
+    #[test]
     fn loading_missing_file_returns_io_error() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("does_not_exist.png");
