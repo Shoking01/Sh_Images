@@ -50,11 +50,9 @@ mod tests {
             ShImagesError::UnsupportedFormat("webp".to_string()).to_string(),
             "unsupported format: webp"
         );
-        assert!(
-            ShImagesError::Io(io::Error::new(io::ErrorKind::Other, "boom"))
-                .to_string()
-                .contains("io error")
-        );
+        assert!(ShImagesError::Io(io::Error::other("boom"))
+            .to_string()
+            .contains("io error"));
     }
 
     #[test]

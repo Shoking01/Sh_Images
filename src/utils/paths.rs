@@ -12,14 +12,20 @@ use crate::utils::errors::{Result, ShImagesError};
 /// - macOS: `$HOME/Library/Application Support`
 /// - Linux: `$XDG_CONFIG_HOME` o, si no está definida, `$HOME/.config`
 ///
-/// `None` en `appdata`/`home`/`xdg` significa "env var no definida".
+/// `None` o un valor vacío en `appdata`/`home`/`xdg` significa "env var no
+/// definida".
 fn config_dir_with(
     appdata: Option<&OsStr>,
     home: Option<&OsStr>,
     xdg: Option<&OsStr>,
 ) -> Result<PathBuf> {
+    let appdata = appdata.filter(|s| !s.is_empty());
+    let home = home.filter(|s| !s.is_empty());
+    let xdg = xdg.filter(|s| !s.is_empty());
+
     #[cfg(target_os = "windows")]
     {
+        // Los parámetros home/xdg no aplican en Windows.
         let _ = (home, xdg);
         let base =
             appdata.ok_or_else(|| ShImagesError::Config("APPDATA is not set".to_string()))?;
@@ -27,6 +33,7 @@ fn config_dir_with(
     }
     #[cfg(target_os = "macos")]
     {
+        // Los parámetros appdata/xdg no aplican en macOS.
         let _ = (appdata, xdg);
         let base = home.ok_or_else(|| ShImagesError::Config("HOME is not set".to_string()))?;
         Ok(PathBuf::from(base)
@@ -43,7 +50,7 @@ fn config_dir_with(
     }
 }
 
-/// Directorio raíz de configuración resolvido desde el entorno real.
+/// Directorio raíz de configuración resuelto desde el entorno real.
 pub fn config_dir() -> Result<PathBuf> {
     config_dir_with(
         std::env::var_os("APPDATA").as_deref(),
@@ -71,6 +78,17 @@ mod tests {
     #[test]
     fn config_dir_errors_when_no_env_var_is_available() {
         let err = config_dir_with(None, None, None).unwrap_err();
+        assert!(matches!(err, ShImagesError::Config(_)));
+    }
+
+    #[test]
+    fn empty_env_values_are_treated_as_unset() {
+        let err = config_dir_with(
+            Some(OsStr::new("")),
+            Some(OsStr::new("")),
+            Some(OsStr::new("")),
+        )
+        .unwrap_err();
         assert!(matches!(err, ShImagesError::Config(_)));
     }
 
