@@ -7,7 +7,9 @@ use crate::ui::theme;
 use crate::utils::errors::Result;
 use crate::utils::paths::settings_path;
 
-/// Estado global de la aplicación, reconstruido en cada frame por `eframe`.
+/// Estado global de la aplicación, creado una vez al arrancar.
+///
+/// `eframe` invoca [`eframe::App::ui`] en cada frame.
 pub struct ShImagesApp {
     settings: Settings,
 }
