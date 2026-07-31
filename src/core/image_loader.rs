@@ -17,7 +17,7 @@ use crate::utils::errors::{Result, ShImagesError};
 /// # Returns
 /// * `Ok(DynamicImage)` si la decodificación fue exitosa.
 /// * `Err(ShImagesError::Io)` si hay problemas de lectura del filesystem.
-/// * `Err(ShImagesError::UnsupportedFormat)` si el formato no es reconocido.
+/// * `Err(ShImagesError::UnsupportedFormat)` si la extensión no corresponde a un formato soportado.
 /// * `Err(ShImagesError::Decode)` si el archivo está corrupto.
 pub fn load_image(path: &Path) -> Result<DynamicImage> {
     image::open(path).map_err(|e| match e {
@@ -70,15 +70,22 @@ mod tests {
     }
 
     #[test]
-    fn unknown_format_returns_unsupported_error() {
+    fn garbage_content_with_png_extension_returns_decode_error() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("random.png");
         fs::write(&path, b"this is definitely not an image").unwrap();
 
         let err = load_image(&path).unwrap_err();
-        assert!(matches!(
-            err,
-            ShImagesError::Decode(_) | ShImagesError::UnsupportedFormat(_)
-        ));
+        assert!(matches!(err, ShImagesError::Decode(_)));
+    }
+
+    #[test]
+    fn unknown_extension_returns_unsupported_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("random.xyz");
+        fs::write(&path, b"this is definitely not an image").unwrap();
+
+        let err = load_image(&path).unwrap_err();
+        assert!(matches!(err, ShImagesError::UnsupportedFormat(_)));
     }
 }
