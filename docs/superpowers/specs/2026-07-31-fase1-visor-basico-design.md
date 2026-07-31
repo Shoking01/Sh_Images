@@ -96,9 +96,13 @@ Funciones (todas puras, sin I/O):
   - Fórmula: `min(viewport.w / image.w, viewport.h / image.h)`.
 - `apply_zoom_at(&mut self, anchor: Point2, factor: f32)` → cambia el zoom
   manteniendo fijo el punto de la imagen bajo `anchor`.
-  - El zoom resultante se **clampa a `[fit_zoom(actual), MAX_ZOOM]`**: el mínimo
-    zoom posible es el fit completo (decisión de usuario #4), nunca menos.
-  - El pan se ajusta: `pan -= (anchor - image_origin_screen(pan)) * (new_zoom - zoom)`.
+  - El zoom resultante se **clampa a `[fit_zoom, fit_zoom * MAX_ZOOM]`**: el mínimo
+    zoom posible es el fit completo (decisión de usuario #4); el máximo es 8x el
+    tamaño de fit (no un múltiplo de tamaño nativo, para que imágenes pequeñas
+    tengan rango de zoom útil).
+  - El pan se ajusta: `pan' = new_origin - center + image_size * new_zoom / 2`,
+    donde `new_origin = anchor - image_point * new_zoom` y
+    `image_point = (anchor - origin) / zoom`.
 - `pan_by(&mut self, delta: Vector2)` → pan libre, sin clamp.
 - `fit(&mut self)` → re-setea pan a centrado y zoom a `fit_zoom`.
 - `image_origin_screen(&self) -> Point2` → esquina superior izquierda de la imagen
@@ -234,7 +238,7 @@ No se agregan otras dependencias. (Los toasts usan egui puro; el canal usa std.)
 - `fit_zoom_scales_to_fit_tall_image` (imagen alta → zoom limita por anchura).
 - `fit_zoom_returns_1_on_zero_dimension`.
 - `apply_zoom_at_keeps_anchor_point_fixed`.
-- `apply_zoom_at_clamps_to_max_zoom` (y al fit como mínimo).
+- `apply_zoom_at_clamps_to_max_zoom` (max = 8x fit) y al fit como mínimo.
 - `pan_by_moves_image_and_reports`.
 - `fit_resets_to_centered_initial`.
 
