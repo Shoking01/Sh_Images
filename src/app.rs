@@ -70,11 +70,16 @@ impl ShImagesApp {
     }
 
     /// Abre el diálogo nativo y, si hay elección, carga la imagen.
-    fn open_dialog(&mut self, t: f64) {
+    ///
+    /// El tiempo de egui se re-lee tras el diálogo (que es bloqueante): usar
+    /// el tiempo del frame en que se abrió haría que un toast emitido ahora
+    /// expirara al instante si el diálogo estuvo abierto más de 3 segundos.
+    fn open_dialog(&mut self) {
         let picked = rfd::FileDialog::new()
             .add_filter("Imágenes", SUPPORTED_EXTENSIONS)
             .pick_file();
         if let Some(path) = picked {
+            let t = self.ctx.input(|i| i.time);
             self.open_path(path, t);
         }
     }
@@ -160,10 +165,10 @@ impl ShImagesApp {
     }
 
     /// Atajos de teclado: Ctrl+O abre, ←→ navega, F re-ajusta a fit.
-    fn handle_shortcuts(&mut self, ui: &mut egui::Ui, t: f64) {
+    fn handle_shortcuts(&mut self, ui: &mut egui::Ui) {
         let open = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::O));
         if open {
-            self.open_dialog(t);
+            self.open_dialog();
         }
         let next = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight));
         if next {
@@ -207,7 +212,7 @@ impl eframe::App for ShImagesApp {
                 });
             });
             if want_open {
-                self.open_dialog(t);
+                self.open_dialog();
             }
 
             match &self.texture {
@@ -229,6 +234,6 @@ impl eframe::App for ShImagesApp {
         self.toasts.update(t);
         self.toasts.show(ui);
 
-        self.handle_shortcuts(ui, t);
+        self.handle_shortcuts(ui);
     }
 }
