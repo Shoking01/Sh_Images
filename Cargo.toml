@@ -11,9 +11,9 @@ path = "src/lib.rs"
 name = "sh_images"
 path = "src/main.rs"
 
-# [[bench]]
-# name = "opening"
-# harness = false
+[[bench]]
+name = "opening"
+harness = false
 
 [dependencies]
 # GUI — eframe/egui: framework inmediato-mode nativo, fijado por Plan.md.
