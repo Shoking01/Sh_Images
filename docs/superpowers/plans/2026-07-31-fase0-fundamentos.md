@@ -739,17 +739,9 @@ Crear `src/core/thumbnail_gen.rs`:
 
 ```rust
 //! Generación de miniaturas (implementación completa en Fase 2).
-
-/// Genera una miniatura de `width` píxeles a partir de la imagen dada.
-pub fn generate_thumbnail(
-    _image: &image::DynamicImage,
-    _width: u32,
-) -> image::DynamicImage {
-    unimplemented!("Fase 2")
-}
 ```
 
-> Atención: `unimplemented!` panica. Es un stub provisional; se marcará su implementación en Fase 2. Si `cargo clippy -- -D warnings` quejara por `unused_must_use` u otro, revisar. Este stub no se invoca en Fase 0, así que no hay riesgo en runtime.
+> Decisión de implementación (2026-07-31): `thumbnail_gen` queda como docstring de módulo únicamente. El plan original proponía un stub con `unimplemented!("Fase 2")`, pero eso es un panic en producción (AGENTS.md §2.1). La función `generate_thumbnail` se introducirá completa en Fase 2.
 
 Crear `src/core/navigation.rs`:
 
