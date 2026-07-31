@@ -12,8 +12,10 @@ use crate::utils::errors::{Result, ShImagesError};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     /// Límite de memoria del LRU cache en MiB (default: 512).
+    #[serde(default)]
     pub cache_memory_limit_mb: u64,
     /// Tema visual de la UI: `"dark"` | `"light"`.
+    #[serde(default)]
     pub theme: String,
 }
 
@@ -45,17 +47,15 @@ impl Settings {
         }
     }
 
-    /// Persiste las preferencias en `path` (escribe a temp y renombra).
+    /// Persiste las preferencias en `path` (crea el directorio padre si falta, escribe a temp y renombra de forma atómica).
     pub fn save(&self, path: &Path) -> Result<()> {
         let content = toml::to_string_pretty(self)
             .map_err(|e| ShImagesError::Config(format!("failed to serialize settings: {e}")))?;
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
         let tmp = path.with_extension("toml.tmp");
         fs::write(&tmp, content)?;
-        match fs::remove_file(path) {
-            Ok(_) => {}
-            Err(e) if e.kind() == ErrorKind::NotFound => {}
-            Err(e) => return Err(ShImagesError::Io(e)),
-        }
         fs::rename(&tmp, path)?;
         Ok(())
     }
@@ -84,6 +84,35 @@ mod tests {
         assert!(path.exists(), "load() should persist defaults");
         let on_disk = fs::read_to_string(&path).unwrap();
         assert!(on_disk.contains("cache_memory_limit_mb = 512"));
+        assert!(on_disk.contains("theme = \"dark\""));
+    }
+
+    #[test]
+    fn load_creates_parent_directory_and_persists_defaults() {
+        let dir = tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("nested")
+            .join("deeper")
+            .join("settings.toml");
+
+        let loaded = Settings::load(&path).unwrap();
+
+        assert_eq!(loaded, Settings::default());
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn save_to_invalid_path_returns_io_error() {
+        let dir = tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        fs::write(&blocker, b"i am a file, not a dir").unwrap();
+        let path = blocker.join("settings.toml");
+
+        let settings = Settings::default();
+        let err = settings.save(&path).unwrap_err();
+
+        assert!(matches!(err, ShImagesError::Io(_)));
     }
 
     #[test]
