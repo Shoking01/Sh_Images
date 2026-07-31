@@ -910,9 +910,9 @@ impl ShImagesApp {
 }
 
 impl eframe::App for ShImagesApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        theme::apply(ctx, &self.settings.theme);
-        egui::CentralPanel::default().show(ctx, |ui| {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        theme::apply(ui.ctx(), &self.settings.theme);
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.centered_and_justified(|ui| {
                 ui.heading("Sh_Images");
             });
@@ -920,6 +920,8 @@ impl eframe::App for ShImagesApp {
     }
 }
 ```
+
+> Actualización eframe 0.35 (2026-07-31): la versión 0.35 renombró `App::update(ctx, frame)` por `App::ui(&mut self, ui: &mut egui::Ui, frame)` (método requerido) y `CentralPanel::show` ahora toma `&mut Ui` en vez de `&egui::Context`. El código de arriba refleja el API real verificado contra `eframe-0.35.0` y `egui-0.35.0`. El patrón de anidar `CentralPanel` dentro del `Ui` de `App::ui` es el documentado por eframe (el `Ui` raíz no tiene fondo).
 
 - [ ] **Step 3: Crear `src/main.rs`**
 
