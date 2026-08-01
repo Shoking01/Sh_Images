@@ -49,6 +49,8 @@ pub struct ShImagesApp {
     user_interacted: bool,
     /// Último tamaño del canvas; se usa para re-fitear al redimensionar.
     last_viewport: Option<Vec2>,
+    /// Último path aplicado a la textura; evita re-aplicar un evento duplicado.
+    last_applied: Option<PathBuf>,
 }
 
 impl ShImagesApp {
@@ -79,6 +81,7 @@ impl ShImagesApp {
             toasts: Toasts::new(),
             user_interacted: false,
             last_viewport: None,
+            last_applied: None,
         }
     }
 
@@ -134,7 +137,7 @@ impl ShImagesApp {
     fn start_load(&mut self, path: PathBuf) {
         if let Some((texture, image_size)) = self.texture_from_cache(&path) {
             tracing::info!(path = %path.display(), "image loaded from cache");
-            self.apply_decoded(texture, image_size);
+            self.apply_decoded(&path, texture, image_size);
             return;
         }
         if self.in_flight_guard().contains(&path) {
@@ -158,7 +161,17 @@ impl ShImagesApp {
 
     /// Aplica una imagen decodificada al estado: textura, transform en fit y
     /// dispara la pre-carga de N±1.
-    fn apply_decoded(&mut self, texture: egui::TextureHandle, image_size: Vec2) {
+    ///
+    /// Marca `path` como el último aplicado para que `poll_loader` pueda
+    /// descartar un evento Ok duplicado (e.g. pre-carga de N+1 que llegó tarde
+    /// cuando N+1 ya es la imagen actual) sin pisar el estado del usuario.
+    fn apply_decoded(
+        &mut self,
+        path: &std::path::Path,
+        texture: egui::TextureHandle,
+        image_size: Vec2,
+    ) {
+        self.last_applied = Some(path.to_path_buf());
         self.texture = Some(texture);
         self.transform = ViewTransform::new(image_size, Vec2::ZERO);
         self.user_interacted = false;
@@ -215,11 +228,15 @@ impl ShImagesApp {
                 tracing::debug!(path = %event.path.display(), "ignoring non-current load result");
                 continue;
             }
+            if self.last_applied.as_ref() == Some(&event.path) {
+                tracing::debug!(path = %event.path.display(), "event already applied; skipping");
+                continue;
+            }
             match event.result {
                 Ok(()) => {
                     tracing::info!(path = %event.path.display(), "image decoded");
                     if let Some((texture, image_size)) = self.texture_from_cache(&event.path) {
-                        self.apply_decoded(texture, image_size);
+                        self.apply_decoded(&event.path, texture, image_size);
                     }
                 }
                 Err(e) => {
