@@ -25,6 +25,10 @@ harness = false
 name = "thumbnail_gen"
 harness = false
 
+[[bench]]
+name = "image_cache"
+harness = false
+
 [dependencies]
 # GUI — eframe/egui: framework immediate-mode nativo, fijado por Plan.md.
 eframe = "0.35"
