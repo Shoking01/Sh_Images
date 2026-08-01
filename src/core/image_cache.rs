@@ -135,8 +135,6 @@ impl CacheInner {
             };
         }
 
-        let mut evicted_keys = Vec::new();
-
         // Reemplazo de una key existente.
         if let Some(&index) = self.map.get(&path) {
             let old_bytes = self.nodes[index].value.bytes;
@@ -146,6 +144,7 @@ impl CacheInner {
                 .saturating_add(bytes);
             self.nodes[index].value = CacheEntry { image, bytes };
             self.move_to_front(index);
+            let evicted_keys = self.evict_to_limit();
             return InsertResult {
                 cached: true,
                 evicted_keys,
@@ -165,15 +164,25 @@ impl CacheInner {
         self.push_front(index);
 
         // Evictar del tail (LRU) mientras exceda el límite.
+        let evicted_keys = self.evict_to_limit();
+
+        InsertResult {
+            cached: true,
+            evicted_keys,
+        }
+    }
+
+    /// Evicta del tail (LRU) mientras `memory_used` exceda el límite.
+    /// Devuelve las claves evictadas. Defensivo: si la lista se corrompe
+    /// (tail == NO_NODE con memoria por encima del límite), limpia el cache.
+    fn evict_to_limit(&mut self) -> Vec<PathBuf> {
+        let mut evicted = Vec::new();
         while self.memory_used > self.limit_bytes() {
             if self.tail == NO_NODE {
                 tracing::warn!("lru cache invariant violated; clearing cache");
                 self.clear();
-                evicted_keys.clear();
-                return InsertResult {
-                    cached: false,
-                    evicted_keys,
-                };
+                evicted.clear();
+                return evicted;
             }
             let tail = self.tail;
             let key = self.nodes[tail].key.clone();
@@ -181,13 +190,9 @@ impl CacheInner {
             let node = self.remove_node(tail);
             self.memory_used = self.memory_used.saturating_sub(node.value.bytes);
             self.map.remove(&key);
-            evicted_keys.push(key);
+            evicted.push(key);
         }
-
-        InsertResult {
-            cached: true,
-            evicted_keys,
-        }
+        evicted
     }
 
     /// Devuelve el índice del nodo para `path` (marcándolo como MRU) o `None`,
@@ -476,6 +481,32 @@ mod tests {
             cache.insert(PathBuf::from(&name), rgba(64, 64)); // 16 KiB cada una
             assert!(cache.memory_used() <= MIB);
         }
+    }
+
+    #[test]
+    fn replace_that_exceeds_limit_evicts_lru_entries() {
+        // Límite 1 MiB; 100 imágenes de 10 KiB llenan exactamente el límite.
+        let cache = ImageCache::new(1);
+        for i in 0..100 {
+            let name = format!("img_{i:03}.png");
+            cache.insert(PathBuf::from(&name), rgba(32, 80)); // 32*80*4 = 10240 B
+        }
+        assert_eq!(cache.memory_used(), 100 * 32 * 80 * 4);
+        assert_eq!(cache.len(), 100);
+
+        // Reemplazar img_000 (10 KiB) por una de 900 KiB dispara evicción LRU.
+        let res = cache.insert(PathBuf::from("img_000.png"), rgba(480, 480)); // 921600 B
+        assert!(res.cached);
+        assert!(
+            !res.evicted_keys.is_empty(),
+            "reemplazo grande debe evictar"
+        );
+        assert!(
+            cache.memory_used() <= MIB,
+            "memory_used debe quedar bajo el límite"
+        );
+        // El reemplazo en sí queda cacheado.
+        assert!(cache.get(Path::new("img_000.png")).is_some());
     }
 
     #[test]
