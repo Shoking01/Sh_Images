@@ -228,15 +228,28 @@ impl ShImagesApp {
                 tracing::debug!(path = %event.path.display(), "ignoring non-current load result");
                 continue;
             }
-            if self.last_applied.as_ref() == Some(&event.path) {
-                tracing::debug!(path = %event.path.display(), "event already applied; skipping");
-                continue;
-            }
             match event.result {
                 Ok(()) => {
+                    if self.last_applied.as_ref() == Some(&event.path) {
+                        tracing::debug!(path = %event.path.display(), "event already applied; skipping");
+                        continue;
+                    }
                     tracing::info!(path = %event.path.display(), "image decoded");
                     if let Some((texture, image_size)) = self.texture_from_cache(&event.path) {
                         self.apply_decoded(&event.path, texture, image_size);
+                    } else {
+                        tracing::warn!(
+                            path = %event.path.display(),
+                            limit_mb = self.cache.memory_limit_mb(),
+                            "decoded image not in cache (exceeds limit or evicted)"
+                        );
+                        self.toasts.push(
+                            format!(
+                                "La imagen excede el límite de memoria del cache ({} MiB) y no se pudo mostrar",
+                                self.cache.memory_limit_mb()
+                            ),
+                            t,
+                        );
                     }
                 }
                 Err(e) => {
