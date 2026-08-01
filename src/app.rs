@@ -12,8 +12,10 @@ use crate::core::image_cache::ImageCache;
 use crate::core::image_loader::load_image;
 use crate::core::navigation::{Navigation, SUPPORTED_EXTENSIONS};
 use crate::core::preload::{preload_targets, PRELOAD_DEPTH};
+use crate::core::thumbnail_cache::ThumbnailCache;
+use crate::core::thumbnail_gen::{generate_thumbnail, THUMB_MAX};
 use crate::core::view::{Vec2, ViewTransform};
-use crate::ui::{theme, toast::Toasts, viewer};
+use crate::ui::{sidebar::SidebarState, theme, toast::Toasts, viewer};
 use crate::utils::errors::Result;
 use crate::utils::paths::settings_path;
 
@@ -25,6 +27,9 @@ struct LoadEvent {
     path: PathBuf,
     result: Result<()>,
 }
+
+/// Número de workers del pool de miniaturas (acotado, nunca un thread por imagen).
+const THUMB_POOL_SIZE: usize = 3;
 
 /// Estado global de la aplicación, creado una vez al arrancar.
 ///
@@ -51,6 +56,14 @@ pub struct ShImagesApp {
     last_viewport: Option<Vec2>,
     /// Último path aplicado a la textura; evita re-aplicar un evento duplicado.
     last_applied: Option<PathBuf>,
+    /// Cache en memoria de miniaturas, compartido con el pool de workers.
+    thumb_cache: Arc<ThumbnailCache>,
+    /// Emisor del canal de paths a miniaturizar (la UI encola, los workers consumen).
+    thumb_tx: mpsc::Sender<PathBuf>,
+    /// Receptor de notificaciones de "miniatura lista" (solo dispara repaint).
+    thumb_events_rx: Option<mpsc::Receiver<()>>,
+    /// Estado del sidebar (visible + texturas GPU).
+    sidebar: SidebarState,
 }
 
 impl ShImagesApp {
@@ -68,6 +81,29 @@ impl ShImagesApp {
         };
         let cache = Arc::new(ImageCache::new(settings.cache_memory_limit_mb));
         let (tx, rx) = mpsc::channel();
+        let thumb_cache = Arc::new(ThumbnailCache::new());
+        let (thumb_tx, thumb_rx) = mpsc::channel::<PathBuf>();
+        let thumb_rx = Arc::new(Mutex::new(thumb_rx));
+        let (thumb_events_tx, thumb_events_rx) = mpsc::channel::<()>();
+        for _ in 0..THUMB_POOL_SIZE {
+            let rx = thumb_rx.clone();
+            let cache = thumb_cache.clone();
+            let events_tx = thumb_events_tx.clone();
+            std::thread::spawn(move || loop {
+                let path = rx.lock().unwrap_or_else(|p| p.into_inner()).recv();
+                let Ok(path) = path else { break };
+                let result = load_image(&path).map(|image| {
+                    let thumb = generate_thumbnail(&image, THUMB_MAX);
+                    cache.insert(path.clone(), thumb);
+                });
+                if let Err(e) = &result {
+                    tracing::debug!(error = %e, path = %path.display(), "thumbnail failed");
+                }
+                if events_tx.send(()).is_err() {
+                    tracing::debug!("thumbnail event dropped (receiver gone)");
+                }
+            });
+        }
         Self {
             settings,
             ctx: cc.egui_ctx.clone(),
@@ -82,6 +118,10 @@ impl ShImagesApp {
             user_interacted: false,
             last_viewport: None,
             last_applied: None,
+            thumb_cache,
+            thumb_tx,
+            thumb_events_rx: Some(thumb_events_rx),
+            sidebar: SidebarState::new(),
         }
     }
 
@@ -118,6 +158,14 @@ impl ShImagesApp {
         match Navigation::from_folder(&path, SUPPORTED_EXTENSIONS) {
             Ok(nav) => {
                 tracing::info!(path = %path.display(), "opening image");
+                self.thumb_cache.clear();
+                self.sidebar.clear_textures();
+                for image_path in &nav.images {
+                    if self.thumb_tx.send(image_path.clone()).is_err() {
+                        tracing::debug!("thumbnail queue closed; workers gone");
+                        break;
+                    }
+                }
                 self.navigation = Some(nav);
                 self.start_load(path);
             }
@@ -261,6 +309,43 @@ impl ShImagesApp {
         self.rx = Some(rx);
     }
 
+    /// Drena las notificaciones de miniaturas y dispara un repaint si hubo.
+    ///
+    /// La UI no necesita el contenido del evento: lee `thumb_cache` directamente
+    /// en el frame siguiente.
+    fn poll_thumbnails(&mut self) {
+        let Some(rx) = self.thumb_events_rx.take() else {
+            return;
+        };
+        let mut repaint = false;
+        while rx.try_recv().is_ok() {
+            repaint = true;
+        }
+        self.thumb_events_rx = Some(rx);
+        if repaint {
+            self.ctx.request_repaint();
+        }
+    }
+
+    /// Salta a la imagen `index` de la carpeta (click en una miniatura).
+    fn navigate_to(&mut self, index: usize) {
+        let Some(nav) = &mut self.navigation else {
+            return;
+        };
+        if index >= nav.images.len() {
+            return;
+        }
+        nav.current = index;
+        if let Some(path) = nav.current_path().cloned() {
+            self.start_load(path);
+        }
+    }
+
+    /// Alterna la visibilidad del sidebar.
+    fn toggle_sidebar(&mut self) {
+        self.sidebar.show = !self.sidebar.show;
+    }
+
     /// Dispara la pre-carga de N±1 usando `preload_targets`.
     fn preload_neighbors(&self) {
         let Some(nav) = &self.navigation else { return };
@@ -309,6 +394,10 @@ impl ShImagesApp {
             self.transform.fit();
             self.user_interacted = false;
         }
+        let toggle_side = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::H));
+        if toggle_side {
+            self.toggle_sidebar();
+        }
     }
 }
 
@@ -326,6 +415,16 @@ impl eframe::App for ShImagesApp {
         let t = ui.input(|i| i.time);
 
         self.poll_loader(t);
+        self.poll_thumbnails();
+
+        if self.sidebar.show {
+            if let Some(nav) = &self.navigation {
+                let selected = self.sidebar.show(ui, nav, &self.thumb_cache);
+                if let Some(index) = selected {
+                    self.navigate_to(index);
+                }
+            }
+        }
 
         let mut want_open = false;
         egui::CentralPanel::default().show(ui, |ui| {
