@@ -66,6 +66,21 @@ impl Navigation {
     pub fn current_path(&self) -> Option<&PathBuf> {
         self.images.get(self.current)
     }
+
+    /// Rutas previa y siguiente (circulares) respecto a la actual.
+    ///
+    /// `[None, None]` si la lista está vacía. Con una sola imagen, ambas
+    /// referencias apuntan a la misma ruta. No muta el estado (a diferencia de
+    /// `next()`/`prev()`).
+    pub fn neighbor_paths(&self) -> [Option<&PathBuf>; 2] {
+        let len = self.images.len();
+        if len == 0 {
+            return [None, None];
+        }
+        let prev = (self.current + len - 1) % len;
+        let next = (self.current + 1) % len;
+        [self.images.get(prev), self.images.get(next)]
+    }
 }
 
 /// Devuelve `true` si `path` tiene una extensión en `supported_exts`.
@@ -171,5 +186,35 @@ mod tests {
         nav.prev();
         assert_eq!(nav.current, 0);
         assert!(nav.current_path().is_none());
+    }
+
+    #[test]
+    fn neighbor_paths_returns_prev_and_next() {
+        let (_d, folder) = setup_folder(); // images: a.jpg, b.png, d.JPG
+        let nav = Navigation::from_folder(&folder.join("b.png"), SUPPORTED_EXTENSIONS).unwrap();
+        let [prev, next] = nav.neighbor_paths();
+        assert_eq!(prev.unwrap(), &folder.join("a.jpg"));
+        assert_eq!(next.unwrap(), &folder.join("d.JPG"));
+    }
+
+    #[test]
+    fn neighbor_paths_single_image_returns_same_twice() {
+        let dir = tempdir().unwrap();
+        let only = dir.path().join("only.png");
+        fs::write(&only, b"x").unwrap();
+        let nav = Navigation::from_folder(&only, SUPPORTED_EXTENSIONS).unwrap();
+        let [prev, next] = nav.neighbor_paths();
+        assert_eq!(prev.unwrap(), &only);
+        assert_eq!(next.unwrap(), &only);
+    }
+
+    #[test]
+    fn neighbor_paths_empty_list_returns_none() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("nothing.png");
+        let nav = Navigation::from_folder(&missing, SUPPORTED_EXTENSIONS).unwrap();
+        let [prev, next] = nav.neighbor_paths();
+        assert!(prev.is_none());
+        assert!(next.is_none());
     }
 }
