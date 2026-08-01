@@ -1,23 +1,29 @@
 //! Estado global de la aplicación y loop principal de `egui`.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 
 use eframe::egui;
 use image::{DynamicImage, GenericImageView};
 
 use crate::config::settings::Settings;
+use crate::core::image_cache::ImageCache;
 use crate::core::image_loader::load_image;
 use crate::core::navigation::{Navigation, SUPPORTED_EXTENSIONS};
+use crate::core::preload::{preload_targets, PRELOAD_DEPTH};
 use crate::core::view::{Vec2, ViewTransform};
 use crate::ui::{theme, toast::Toasts, viewer};
 use crate::utils::errors::Result;
 use crate::utils::paths::settings_path;
 
-/// Evento enviado por el thread worker al UI thread.
+/// Evento enviado por un thread worker al UI thread.
+///
+/// La imagen decodificada NO viaja por el canal: el worker la inserta en el
+/// cache y la UI la lee de ahí. El evento solo notifica el resultado del path.
 struct LoadEvent {
     path: PathBuf,
-    result: Result<DynamicImage>,
+    result: Result<()>,
 }
 
 /// Estado global de la aplicación, creado una vez al arrancar.
@@ -30,6 +36,13 @@ pub struct ShImagesApp {
     navigation: Option<Navigation>,
     transform: ViewTransform,
     texture: Option<egui::TextureHandle>,
+    /// Cache LRU de imágenes decodificadas, compartido con los workers.
+    cache: Arc<ImageCache>,
+    /// Paths con una carga en curso (deduplicación de workers).
+    in_flight: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Emisor del canal único (clonado a cada worker).
+    tx: mpsc::Sender<LoadEvent>,
+    /// Receptor persistente del canal único.
     rx: Option<mpsc::Receiver<LoadEvent>>,
     toasts: Toasts,
     /// `true` si el usuario ha hecho zoom/pan con la imagen actual.
@@ -51,13 +64,18 @@ impl ShImagesApp {
                 Settings::default()
             }
         };
+        let cache = Arc::new(ImageCache::new(settings.cache_memory_limit_mb));
+        let (tx, rx) = mpsc::channel();
         Self {
             settings,
             ctx: cc.egui_ctx.clone(),
             navigation: None,
             transform: ViewTransform::new(Vec2::ZERO, Vec2::ZERO),
             texture: None,
-            rx: None,
+            cache,
+            in_flight: Arc::new(Mutex::new(HashSet::new())),
+            tx,
+            rx: Some(rx),
             toasts: Toasts::new(),
             user_interacted: false,
             last_viewport: None,
@@ -70,6 +88,11 @@ impl ShImagesApp {
     /// de vida completo sin arrancar una ventana.
     pub fn load_settings() -> Result<Settings> {
         settings_path().and_then(|path| Settings::load(&path))
+    }
+
+    /// Guard del set de paths en carga, recuperándose de un lock envenenado.
+    fn in_flight_guard(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
+        self.in_flight.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// Abre el diálogo nativo y, si hay elección, carga la imagen.
@@ -103,53 +126,122 @@ impl ShImagesApp {
         }
     }
 
-    /// Dispara un thread worker que carga `path` y envía el resultado por canal.
+    /// Carga `path` de la forma más rápida posible:
+    ///
+    /// 1. Cache hit → textura inmediata + pre-carga (sin thread).
+    /// 2. In-flight → no-op (un worker ya lo está cargando).
+    /// 3. Miss → spawn worker que decodifica, cachea y notifica.
     fn start_load(&mut self, path: PathBuf) {
-        let (tx, rx) = mpsc::channel();
-        self.rx = Some(rx);
+        if let Some((texture, image_size)) = self.texture_from_cache(&path) {
+            tracing::info!(path = %path.display(), "image loaded from cache");
+            self.apply_decoded(texture, image_size);
+            return;
+        }
+        if self.in_flight_guard().contains(&path) {
+            tracing::debug!(path = %path.display(), "load already in flight");
+            return;
+        }
+        self.spawn_load(path, false);
+    }
+
+    /// Construye la textura desde el cache si `path` está presente.
+    ///
+    /// Devuelve `(textura, tamaño de imagen)` con el guard del cache ya soltado
+    /// (la `CacheEntryRef` se cae al final de la llamada), para que el caller
+    /// pueda mutar `self` libremente después.
+    fn texture_from_cache(&self, path: &std::path::Path) -> Option<(egui::TextureHandle, Vec2)> {
+        let entry = self.cache.get(path)?;
+        let texture = make_texture(&self.ctx, &entry);
+        let size = entry.dimensions();
+        Some((texture, Vec2::new(size.0 as f32, size.1 as f32)))
+    }
+
+    /// Aplica una imagen decodificada al estado: textura, transform en fit y
+    /// dispara la pre-carga de N±1.
+    fn apply_decoded(&mut self, texture: egui::TextureHandle, image_size: Vec2) {
+        self.texture = Some(texture);
+        self.transform = ViewTransform::new(image_size, Vec2::ZERO);
+        self.user_interacted = false;
+        self.last_viewport = None;
+        self.preload_neighbors();
+    }
+
+    /// Spawnea un worker que decodifica `path`, lo inserta en el cache y envía
+    /// un evento ligero por el canal único.
+    ///
+    /// `is_preload` solo cambia el nivel de log (DEBUG vs INFO): la lógica del
+    /// worker es idéntica. El flag no genera toasts de error — eso lo decide el
+    /// check `is_current` en `poll_loader`.
+    fn spawn_load(&self, path: PathBuf, is_preload: bool) {
+        if is_preload {
+            tracing::debug!(path = %path.display(), "preloading image");
+        } else {
+            tracing::info!(path = %path.display(), "loading image");
+        }
+        self.in_flight_guard().insert(path.clone());
+        let tx = self.tx.clone();
+        let cache = self.cache.clone();
+        let in_flight = self.in_flight.clone();
         let ctx = self.ctx.clone();
         std::thread::spawn(move || {
-            let result = load_image(&path);
-            let event = LoadEvent { path, result };
-            if tx.send(event).is_err() {
+            let result = load_image(&path).map(|image| {
+                cache.insert(path.clone(), image);
+            });
+            in_flight
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&path);
+            if tx.send(LoadEvent { path, result }).is_err() {
                 tracing::debug!("load event dropped (receiver gone)");
             }
             ctx.request_repaint();
         });
     }
 
-    /// Cada frame, recoge el resultado del worker si está listo.
-    fn poll_loader(&mut self, _ui: &mut egui::Ui, t: f64) {
-        let Some(rx) = &self.rx else { return };
-        let Ok(event) = rx.try_recv() else { return };
-        self.rx = None;
-
-        // Descarta resultados de navegaciones obsoletas.
-        let is_current = self
-            .navigation
-            .as_ref()
-            .and_then(|n| n.current_path())
-            .map(|p| p == &event.path)
-            .unwrap_or(false);
-        if !is_current {
-            tracing::debug!(path = %event.path.display(), "ignoring stale load result");
-            return;
+    /// Drena el canal único; solo actúa sobre el path actual.
+    ///
+    /// Los eventos de pre-carga obsoletos (path distinto del actual) se ignoran
+    /// silenciosamente: el único efecto que tenían era poblar el cache.
+    fn poll_loader(&mut self, t: f64) {
+        let Some(rx) = self.rx.take() else { return };
+        while let Ok(event) = rx.try_recv() {
+            let is_current = self
+                .navigation
+                .as_ref()
+                .and_then(|n| n.current_path())
+                .map(|p| p == &event.path)
+                .unwrap_or(false);
+            if !is_current {
+                tracing::debug!(path = %event.path.display(), "ignoring non-current load result");
+                continue;
+            }
+            match event.result {
+                Ok(()) => {
+                    tracing::info!(path = %event.path.display(), "image decoded");
+                    if let Some((texture, image_size)) = self.texture_from_cache(&event.path) {
+                        self.apply_decoded(texture, image_size);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %event.path.display(), "failed to load image");
+                    self.toasts.push(format!("No se pudo abrir: {e}"), t);
+                }
+            }
         }
+        self.rx = Some(rx);
+    }
 
-        match event.result {
-            Ok(image) => {
-                tracing::info!(path = %event.path.display(), "image decoded");
-                let size = image.dimensions();
-                self.texture = Some(make_texture(&self.ctx, &image));
-                self.transform =
-                    ViewTransform::new(Vec2::new(size.0 as f32, size.1 as f32), Vec2::ZERO);
-                self.user_interacted = false;
-                self.last_viewport = None;
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, path = %event.path.display(), "failed to load image");
-                self.toasts.push(format!("No se pudo abrir: {e}"), t);
-            }
+    /// Dispara la pre-carga de N±1 usando `preload_targets`.
+    fn preload_neighbors(&self) {
+        let Some(nav) = &self.navigation else { return };
+        let targets = preload_targets(
+            nav,
+            PRELOAD_DEPTH,
+            |p| self.cache.contains(p),
+            |p| self.in_flight_guard().contains(p),
+        );
+        for path in targets {
+            self.spawn_load(path, true);
         }
     }
 
@@ -203,7 +295,7 @@ impl eframe::App for ShImagesApp {
         theme::apply(ui.ctx(), &self.settings.theme);
         let t = ui.input(|i| i.time);
 
-        self.poll_loader(ui, t);
+        self.poll_loader(t);
 
         let mut want_open = false;
         egui::CentralPanel::default().show(ui, |ui| {
