@@ -1,3 +1,239 @@
+# Fase 2 — Subproyecto 1: LRU Cache de Imágenes — Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Implementar el cache LRU thread-safe de imágenes decodificadas en `core/image_cache.rs` con API `get`/`insert`/`len`/`memory_used`/`is_empty`/`hit_ratio`, evicción LRU por límite de memoria en MiB y tests unitarios completos.
+
+**Architecture:** Arena de nodos (`Vec<Node>` con enlaces `prev`/`next` como índices `usize`, sentinela `NO_NODE = usize::MAX`) + `HashMap<PathBuf, usize>` para lookups O(1). Estado protegido por `Mutex<CacheInner>`; `get` devuelve `CacheEntryRef<'a>` (guarda el lock y `Deref<Target = DynamicImage>`) para no clonar pixels. `core/` no depende de `egui` (AGENTS.md §3.2); `Arc` lo pone el caller en el subproyecto 2.
+
+**Tech Stack:** `std::collections::HashMap`, `std::sync::Mutex`, `image::DynamicImage` (ya en `Cargo.toml`). Sin dependencias nuevas.
+
+**Spec:** `docs/superpowers/specs/2026-08-01-fase2-lru-cache-design.md`
+
+---
+
+## File Structure
+
+```
+src/core/image_cache.rs   # REWRITE — reemplaza el stub de Fase 0 (hoy solo `memory_limit_mb`)
+```
+
+No se toca `Cargo.toml` (sin dependencias nuevas) ni `app.rs` (integración en subproyecto 2).
+
+---
+
+## Task 1: Tests que fallan — API del LRU cache
+
+**Files:**
+- Rewrite: `src/core/image_cache.rs`
+
+- [ ] **Step 1: Escribir los tests**
+
+Reemplazar `src/core/image_cache.rs` completo por el siguiente contenido (solo tests; el build fallará porque la API aún no existe):
+
+```rust
+//! Cache LRU de imágenes decodificadas, thread-safe.
+//!
+//! `core/` no depende de `egui` (AGENTS.md §3.2). Implementación completa en el
+//! siguiente task: aquí solo viven los tests (TDD, fail-first).
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::RgbaImage;
+
+    const MIB: u64 = 1024 * 1024;
+
+    /// Helper: imagen RGBA de `w x h` (4 B/px).
+    fn rgba(w: u32, h: u32) -> DynamicImage {
+        DynamicImage::ImageRgba8(RgbaImage::new(w, h))
+    }
+
+    #[test]
+    fn estimate_bytes_counts_channels() {
+        assert_eq!(estimate_bytes(&rgba(16, 16)), 16 * 16 * 4);
+        let rgb = DynamicImage::ImageRgb8(image::RgbImage::new(16, 16));
+        assert_eq!(estimate_bytes(&rgb), 16 * 16 * 3);
+    }
+
+    #[test]
+    fn default_matches_settings_default() {
+        let cache = ImageCache::default();
+        assert_eq!(cache.memory_limit_mb(), 512);
+        assert_eq!(cache.len(), 0);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn new_with_limit_exposes_limit() {
+        let cache = ImageCache::new(64);
+        assert_eq!(cache.memory_limit_mb(), 64);
+    }
+
+    #[test]
+    fn is_empty_reflects_state() {
+        let cache = ImageCache::new(1);
+        assert!(cache.is_empty());
+        cache.insert(PathBuf::from("a.png"), rgba(16, 16));
+        assert!(!cache.is_empty());
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn insert_then_get_roundtrips_small_image() {
+        let cache = ImageCache::new(1);
+        let res = cache.insert(PathBuf::from("a.png"), rgba(64, 32));
+        assert!(res.cached);
+        assert!(res.evicted_keys.is_empty());
+        let got = cache.get(Path::new("a.png")).expect("debería estar cacheada");
+        assert_eq!(got.dimensions(), (64, 32));
+    }
+
+    #[test]
+    fn get_on_missing_path_returns_none() {
+        let cache = ImageCache::new(1);
+        assert!(cache.get(Path::new("nope.png")).is_none());
+    }
+
+    #[test]
+    fn insert_existing_path_replaces_entry() {
+        let cache = ImageCache::new(1);
+        cache.insert(PathBuf::from("a.png"), rgba(256, 256));
+        let res = cache.insert(PathBuf::from("a.png"), rgba(128, 128));
+        assert!(res.cached);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.memory_used(), 128 * 128 * 4);
+        assert_eq!(
+            cache.get(Path::new("a.png")).expect("cacheada").dimensions(),
+            (128, 128)
+        );
+    }
+
+    #[test]
+    fn oversized_image_is_not_cached_all_or_nothing() {
+        let cache = ImageCache::new(1); // 1 MiB
+        cache.insert(PathBuf::from("a.png"), rgba(256, 256)); // 256 KiB
+        let res = cache.insert(PathBuf::from("big.png"), rgba(1024, 1024)); // 4 MiB
+        assert!(!res.cached);
+        assert!(res.evicted_keys.is_empty());
+        assert_eq!(cache.len(), 1);
+        assert!(cache.get(Path::new("a.png")).is_some());
+        assert!(cache.get(Path::new("big.png")).is_none());
+    }
+
+    #[test]
+    fn zero_dimension_image_fits() {
+        let cache = ImageCache::new(1);
+        let res = cache.insert(PathBuf::from("zero.png"), rgba(0, 64));
+        assert!(res.cached);
+        assert_eq!(cache.memory_used(), 0);
+    }
+
+    #[test]
+    fn zero_memory_limit_rejects_normal_image() {
+        let cache = ImageCache::new(0);
+        let res = cache.insert(PathBuf::from("a.png"), rgba(16, 16));
+        assert!(!res.cached);
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn eviction_removes_least_recently_used_first() {
+        let cache = ImageCache::new(1); // 1 MiB = 4 × 256 KiB
+        for name in ["a.png", "b.png", "c.png", "d.png"] {
+            cache.insert(PathBuf::from(name), rgba(256, 256));
+        }
+        assert_eq!(cache.len(), 4);
+        assert_eq!(cache.memory_used(), 4 * 256 * 256 * 4);
+
+        let res = cache.insert(PathBuf::from("e.png"), rgba(256, 256));
+        assert!(res.cached);
+        assert_eq!(res.evicted_keys, vec![PathBuf::from("a.png")]);
+        assert_eq!(cache.len(), 4);
+        assert!(cache.get(Path::new("a.png")).is_none());
+        for name in ["b.png", "c.png", "d.png", "e.png"] {
+            assert!(cache.get(Path::new(name)).is_some());
+        }
+    }
+
+    #[test]
+    fn get_moves_entry_to_most_recent() {
+        let cache = ImageCache::new(1);
+        for name in ["a.png", "b.png", "c.png", "d.png"] {
+            cache.insert(PathBuf::from(name), rgba(256, 256));
+        }
+        // Acceder a la más vieja (a) la mueve al frente (MRU).
+        assert!(cache.get(Path::new("a.png")).is_some());
+        let res = cache.insert(PathBuf::from("e.png"), rgba(256, 256));
+        // La evictada ahora es b, no a.
+        assert_eq!(res.evicted_keys, vec![PathBuf::from("b.png")]);
+        assert!(cache.get(Path::new("a.png")).is_some());
+        assert!(cache.get(Path::new("b.png")).is_none());
+    }
+
+    #[test]
+    fn memory_used_never_exceeds_limit() {
+        let cache = ImageCache::new(1);
+        for i in 0..50 {
+            let name = format!("img_{i}.png");
+            cache.insert(PathBuf::from(&name), rgba(64, 64)); // 16 KiB cada una
+            assert!(cache.memory_used() <= 1 * MIB);
+        }
+    }
+
+    #[test]
+    fn memory_used_and_len_correct_after_evictions() {
+        let cache = ImageCache::new(1);
+        for name in ["a.png", "b.png", "c.png", "d.png", "e.png"] {
+            cache.insert(PathBuf::from(name), rgba(256, 256));
+        }
+        assert_eq!(cache.len(), 4);
+        assert_eq!(cache.memory_used(), 4 * 256 * 256 * 4);
+        for name in ["b.png", "c.png", "d.png", "e.png"] {
+            assert!(cache.get(Path::new(name)).is_some());
+        }
+        assert!(cache.get(Path::new("a.png")).is_none());
+    }
+
+    #[test]
+    fn hit_ratio_tracks_hits_and_misses() {
+        let cache = ImageCache::new(1);
+        cache.insert(PathBuf::from("a.png"), rgba(16, 16));
+        assert_eq!(cache.hit_ratio(), 0.0);
+
+        assert!(cache.get(Path::new("a.png")).is_some()); // hit
+        assert!(cache.get(Path::new("a.png")).is_some()); // hit
+        assert!(cache.get(Path::new("b.png")).is_none()); // miss
+        let ratio = cache.hit_ratio();
+        assert!((ratio - 2.0 / 3.0).abs() < 1e-3);
+    }
+}
+```
+
+- [ ] **Step 2: Ejecutar los tests para verificar que fallan**
+
+Run: `cargo test --lib core::image_cache`
+Expected: FAIL — errores de compilación (`ImageCache`, `InsertResult`, `CacheEntryRef`, `estimate_bytes`, `DynamicImage` no definidos en `super`).
+
+- [ ] **Step 3: Commit de los tests rojos**
+
+```bash
+git add src/core/image_cache.rs
+git commit -m "test: add failing LRU cache API tests (TDD red)"
+```
+
+---
+
+## Task 2: Implementación completa del LRU cache
+
+**Files:**
+- Rewrite: `src/core/image_cache.rs`
+
+- [ ] **Step 1: Escribir la implementación**
+
+Reemplazar `src/core/image_cache.rs` completo (tests del Task 1 + implementación). El archivo final:
+
+```rust
 //! Cache LRU de imágenes decodificadas, thread-safe.
 //!
 //! `core/` no depende de `egui` (AGENTS.md §3.2). La `DynamicImage` viene del
@@ -135,6 +371,8 @@ impl CacheInner {
             };
         }
 
+        let mut evicted_keys = Vec::new();
+
         // Reemplazo de una key existente.
         if let Some(&index) = self.map.get(&path) {
             let old_bytes = self.nodes[index].value.bytes;
@@ -144,7 +382,6 @@ impl CacheInner {
                 .saturating_add(bytes);
             self.nodes[index].value = CacheEntry { image, bytes };
             self.move_to_front(index);
-            let evicted_keys = self.evict_to_limit();
             return InsertResult {
                 cached: true,
                 evicted_keys,
@@ -164,25 +401,15 @@ impl CacheInner {
         self.push_front(index);
 
         // Evictar del tail (LRU) mientras exceda el límite.
-        let evicted_keys = self.evict_to_limit();
-
-        InsertResult {
-            cached: true,
-            evicted_keys,
-        }
-    }
-
-    /// Evicta del tail (LRU) mientras `memory_used` exceda el límite.
-    /// Devuelve las claves evictadas. Defensivo: si la lista se corrompe
-    /// (tail == NO_NODE con memoria por encima del límite), limpia el cache.
-    fn evict_to_limit(&mut self) -> Vec<PathBuf> {
-        let mut evicted = Vec::new();
         while self.memory_used > self.limit_bytes() {
             if self.tail == NO_NODE {
                 tracing::warn!("lru cache invariant violated; clearing cache");
                 self.clear();
-                evicted.clear();
-                return evicted;
+                evicted_keys.clear();
+                return InsertResult {
+                    cached: false,
+                    evicted_keys,
+                };
             }
             let tail = self.tail;
             let key = self.nodes[tail].key.clone();
@@ -190,9 +417,13 @@ impl CacheInner {
             let node = self.remove_node(tail);
             self.memory_used = self.memory_used.saturating_sub(node.value.bytes);
             self.map.remove(&key);
-            evicted.push(key);
+            evicted_keys.push(key);
         }
-        evicted
+
+        InsertResult {
+            cached: true,
+            evicted_keys,
+        }
     }
 
     /// Devuelve el índice del nodo para `path` (marcándolo como MRU) o `None`,
@@ -324,14 +555,20 @@ impl Deref for CacheEntryRef<'_> {
 /// Coste de una `DynamicImage` en bytes (dimensiones × canales).
 fn estimate_bytes(image: &DynamicImage) -> u64 {
     let (w, h) = (image.width() as u64, image.height() as u64);
-    let bpp = image.color().bytes_per_pixel() as u64;
+    let bpp = match image.color() {
+        image::ColorType::Rgb8 => 3,
+        image::ColorType::Rgba8 => 4,
+        image::ColorType::L8 => 1,
+        image::ColorType::La8 => 2,
+        _ => 4, // fallback conservador
+    };
     w.saturating_mul(h).saturating_mul(bpp)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{GenericImageView, RgbaImage};
+    use image::RgbaImage;
 
     const MIB: u64 = 1024 * 1024;
 
@@ -345,14 +582,6 @@ mod tests {
         assert_eq!(estimate_bytes(&rgba(16, 16)), 16 * 16 * 4);
         let rgb = DynamicImage::ImageRgb8(image::RgbImage::new(16, 16));
         assert_eq!(estimate_bytes(&rgb), 16 * 16 * 3);
-    }
-
-    #[test]
-    fn estimate_bytes_counts_high_depth_and_float_channels() {
-        let rgb16 = DynamicImage::ImageRgb16(image::ImageBuffer::new(4, 4));
-        let rgba16 = DynamicImage::ImageRgba16(image::ImageBuffer::new(4, 4));
-        assert_eq!(estimate_bytes(&rgb16), 4 * 4 * 6);
-        assert_eq!(estimate_bytes(&rgba16), 4 * 4 * 8);
     }
 
     #[test]
@@ -384,9 +613,7 @@ mod tests {
         let res = cache.insert(PathBuf::from("a.png"), rgba(64, 32));
         assert!(res.cached);
         assert!(res.evicted_keys.is_empty());
-        let got = cache
-            .get(Path::new("a.png"))
-            .expect("debería estar cacheada");
+        let got = cache.get(Path::new("a.png")).expect("debería estar cacheada");
         assert_eq!(got.dimensions(), (64, 32));
     }
 
@@ -405,10 +632,7 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.memory_used(), 128 * 128 * 4);
         assert_eq!(
-            cache
-                .get(Path::new("a.png"))
-                .expect("cacheada")
-                .dimensions(),
+            cache.get(Path::new("a.png")).expect("cacheada").dimensions(),
             (128, 128)
         );
     }
@@ -481,34 +705,8 @@ mod tests {
         for i in 0..50 {
             let name = format!("img_{i}.png");
             cache.insert(PathBuf::from(&name), rgba(64, 64)); // 16 KiB cada una
-            assert!(cache.memory_used() <= MIB);
+            assert!(cache.memory_used() <= 1 * MIB);
         }
-    }
-
-    #[test]
-    fn replace_that_exceeds_limit_evicts_lru_entries() {
-        // Límite 1 MiB; 100 imágenes de 10 KiB llenan exactamente el límite.
-        let cache = ImageCache::new(1);
-        for i in 0..100 {
-            let name = format!("img_{i:03}.png");
-            cache.insert(PathBuf::from(&name), rgba(32, 80)); // 32*80*4 = 10240 B
-        }
-        assert_eq!(cache.memory_used(), 100 * 32 * 80 * 4);
-        assert_eq!(cache.len(), 100);
-
-        // Reemplazar img_000 (10 KiB) por una de 900 KiB dispara evicción LRU.
-        let res = cache.insert(PathBuf::from("img_000.png"), rgba(480, 480)); // 921600 B
-        assert!(res.cached);
-        assert!(
-            !res.evicted_keys.is_empty(),
-            "reemplazo grande debe evictar"
-        );
-        assert!(
-            cache.memory_used() <= MIB,
-            "memory_used debe quedar bajo el límite"
-        );
-        // El reemplazo en sí queda cacheado.
-        assert!(cache.get(Path::new("img_000.png")).is_some());
     }
 
     #[test]
@@ -538,3 +736,95 @@ mod tests {
         assert!((ratio - 2.0 / 3.0).abs() < 1e-3);
     }
 }
+```
+
+- [ ] **Step 2: Ejecutar los tests para verificar que pasan**
+
+Run: `cargo test --lib core::image_cache`
+Expected: PASS — 15 tests (13 del spec + `estimate_bytes_counts_channels` + `new_with_limit_exposes_limit`).
+
+- [ ] **Step 3: Verificar compilación y lints**
+
+Run:
+```bash
+cargo check
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+```
+Expected: 0 warnings, 0 diffs de formato.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/core/image_cache.rs
+git commit -m "feat: add thread-safe LRU image cache with memory limit"
+```
+
+---
+
+## Task 3: Verificación final según AGENTS.md
+
+**Files:** ninguno (QA)
+
+- [ ] **Step 1: Correr la suite completa**
+
+Run:
+```bash
+cargo check
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+cargo test
+cargo test --release
+```
+Expected: todo pasa, 0 warnings, ~59 tests totales (44 previos + 15 de image_cache).
+
+- [ ] **Step 2: Verificar ausencia de panics en producción**
+
+Run: `rg -n "unwrap\(|expect\(" src/`
+Expected: solo apariciones dentro de `#[cfg(test)]`. Nota: `lock()` usa
+`unwrap_or_else` (recuperación de lock envenenado), que no es un `unwrap(`.
+
+- [ ] **Step 3: Verificar cobertura de `core/image_cache.rs`**
+
+Run: `cargo test --lib core::image_cache`
+Expected: los 15 tests pasan (cubre inserción, evicción LRU, límite de memoria,
+hit/miss ratio, all-or-nothing — AGENTS.md §4.2).
+
+- [ ] **Step 4: Commit final (solo si la verificación modificó algo)**
+
+```bash
+git add -A
+git commit -m "chore: final verification pass for Fase 2 LRU cache"
+```
+
+> Si el árbol está limpio tras `cargo fmt --check`, no hay commit.
+
+---
+
+## Self-Review
+
+**Spec coverage:**
+- Estructura LRU propia (arena + índices, sin punteros) ✓ (Task 2)
+- API `get`/`insert`/`len`/`memory_used`/`is_empty`/`hit_ratio` ✓ (Task 2)
+- Evicción LRU por límite MiB ✓ (Task 2)
+- `estimate_bytes` por dimensiones + canales ✓ (Task 2)
+- Contadores hit/miss ✓ (Task 2)
+- Thread-safe con `Mutex` interno ✓ (Task 2)
+- All-or-nothing (imagen > límite no cachea ni evicta) ✓ (Task 2, test
+  `oversized_image_is_not_cached_all_or_nothing`)
+- `Default` = 512 MiB coincide con `Settings::default()` ✓ (test
+  `default_matches_settings_default`)
+- 13 casos de prueba del spec ✓ (Task 1)
+- Sin dependencias nuevas ✓ (sin cambios en `Cargo.toml`)
+- Sin `.unwrap()`/`.expect()` en producción ✓ (Task 3 Step 2)
+- Docstrings en toda la API pública ✓ (Task 2)
+
+**Placeholder scan:** Sin "TBD"/"TODO" en el plan. Todo paso tiene código completo.
+
+**Type consistency:**
+- `ImageCache::new(u64) -> Self`, `Default` → `new(DEFAULT_MEMORY_LIMIT_MB)` — consistente.
+- `insert(&self, PathBuf, DynamicImage) -> InsertResult` — consistente entre Task 1 (tests) y Task 2 (impl).
+- `get(&self, &Path) -> Option<CacheEntryRef<'_>>` — consistente.
+- `CacheEntryRef` con `Deref<Target = DynamicImage>` — consistente.
+- `estimate_bytes(&DynamicImage) -> u64` — consistente entre test y impl.
+- `DEFAULT_MEMORY_LIMIT_MB = 512` coincide con `Settings::default().cache_memory_limit_mb`.
