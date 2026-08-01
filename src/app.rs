@@ -13,6 +13,7 @@ use crate::core::image_cache::ImageCache;
 use crate::core::image_loader::load_image;
 use crate::core::navigation::{Navigation, SUPPORTED_EXTENSIONS};
 use crate::core::preload::{preload_targets, PRELOAD_DEPTH};
+use crate::core::thumb_queue::ThumbQueue;
 use crate::core::thumbnail_cache::ThumbnailCache;
 use crate::core::thumbnail_gen::{generate_thumbnail, THUMB_MAX};
 use crate::core::view::{Vec2, ViewTransform};
@@ -59,8 +60,8 @@ pub struct ShImagesApp {
     last_applied: Option<PathBuf>,
     /// Cache en memoria de miniaturas, compartido con el pool de workers.
     thumb_cache: Arc<ThumbnailCache>,
-    /// Emisor del canal de paths a miniaturizar (la UI encola, los workers consumen).
-    thumb_tx: mpsc::Sender<PathBuf>,
+    /// Cola FIFO de paths a miniaturizar (la UI encola, los workers consumen).
+    thumb_queue: ThumbQueue,
     /// Receptor de notificaciones de "miniatura lista" (solo dispara repaint).
     thumb_events_rx: Option<mpsc::Receiver<()>>,
     /// Estado del sidebar (visible + texturas GPU).
@@ -87,37 +88,36 @@ impl ShImagesApp {
         let (tx, rx) = mpsc::channel();
         let ctx = cc.egui_ctx.clone();
         let thumb_cache = Arc::new(ThumbnailCache::new());
-        let (thumb_tx, thumb_rx) = mpsc::channel::<PathBuf>();
-        let thumb_rx = Arc::new(Mutex::new(thumb_rx));
+        let thumb_queue = ThumbQueue::new();
         let thumb_epoch = Arc::new(AtomicU64::new(0));
         let (thumb_events_tx, thumb_events_rx) = mpsc::channel::<()>();
         for _ in 0..THUMB_POOL_SIZE {
-            let rx = thumb_rx.clone();
+            let queue = thumb_queue.clone();
             let cache = thumb_cache.clone();
             let events_tx = thumb_events_tx.clone();
             let epoch = thumb_epoch.clone();
             let ctx = ctx.clone();
-            std::thread::spawn(move || loop {
-                let path = rx.lock().unwrap_or_else(|p| p.into_inner()).recv();
-                let Ok(path) = path else { break };
-                let start_epoch = epoch.load(Ordering::Relaxed);
-                let image = load_image(&path);
-                if epoch.load(Ordering::Relaxed) != start_epoch {
-                    continue;
-                }
-                match image {
-                    Ok(image) => {
-                        let thumb = generate_thumbnail(&image, THUMB_MAX);
-                        cache.insert(path.clone(), thumb);
+            std::thread::spawn(move || {
+                while let Some(path) = queue.pop() {
+                    let start_epoch = epoch.load(Ordering::Relaxed);
+                    let image = load_image(&path);
+                    if epoch.load(Ordering::Relaxed) != start_epoch {
+                        continue;
                     }
-                    Err(e) => {
-                        tracing::debug!(error = %e, path = %path.display(), "thumbnail failed");
+                    match image {
+                        Ok(image) => {
+                            let thumb = generate_thumbnail(&image, THUMB_MAX);
+                            cache.insert(path.clone(), thumb);
+                        }
+                        Err(e) => {
+                            tracing::debug!(error = %e, path = %path.display(), "thumbnail failed");
+                        }
                     }
+                    if events_tx.send(()).is_err() {
+                        tracing::debug!("thumbnail event dropped (receiver gone)");
+                    }
+                    ctx.request_repaint();
                 }
-                if events_tx.send(()).is_err() {
-                    tracing::debug!("thumbnail event dropped (receiver gone)");
-                }
-                ctx.request_repaint();
             });
         }
         Self {
@@ -135,7 +135,7 @@ impl ShImagesApp {
             last_viewport: None,
             last_applied: None,
             thumb_cache,
-            thumb_tx,
+            thumb_queue,
             thumb_events_rx: Some(thumb_events_rx),
             sidebar: SidebarState::new(),
             thumb_epoch,
@@ -178,11 +178,13 @@ impl ShImagesApp {
                 self.thumb_epoch.fetch_add(1, Ordering::Relaxed);
                 self.thumb_cache.clear();
                 self.sidebar.clear_textures();
+                // Descarta los paths de la carpeta anterior aún en cola: el epoch
+                // cubre a los workers que decodifican en vuelo, pero sin este
+                // drenado cada worker consumiría (y descartaría) un path obsoleto
+                // antes de llegar a los nuevos.
+                self.thumb_queue.drain();
                 for image_path in &nav.images {
-                    if self.thumb_tx.send(image_path.clone()).is_err() {
-                        tracing::debug!("thumbnail queue closed; workers gone");
-                        break;
-                    }
+                    self.thumb_queue.push(image_path.clone());
                 }
                 self.navigation = Some(nav);
                 self.start_load(path);

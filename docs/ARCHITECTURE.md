@@ -55,3 +55,39 @@
   El código del proyecto quedó adaptado a esa API.
 - **Alternativas:** Mantener 0.31 (acumular deuda de migración), subir más
   tarde (migración más costosa con más código).
+
+## ADR-006: Pipeline de miniaturas separado del full-res (sidebar)
+
+- **Contexto:** El sidebar de miniaturas necesita decodificar N imágenes de una
+  carpeta sin bloquear el UI thread ni competir con el pipeline de full-res del
+  S2 (decodificación bajo demanda + cache LRU + pre-carga N±1). Decodificar en
+  el UI thread congela la app; reutilizar el canal del S2 mezclaría latencia de
+  thumbnails con la imagen en pantalla.
+- **Decisión:** Un pipeline dedicado con (1) cola FIFO `ThumbQueue`
+  (`Mutex` + `Condvar`, en `core/thumb_queue.rs`), (2) pool acotado de 3
+  workers que decodifican a `THUMB_MAX` (96px) y (3) un `ThumbnailCache` en
+  memoria sin evicción (`core/thumbnail_cache.rs`), separado del LRU del S2.
+  La UI no recibe las imágenes por el canal: solo recibe una notificación
+  ligera (`mpsc`) que dispara repaint y lee el cache directamente. Los workers
+  llaman `ctx.request_repaint()` para despertar la UI inactiva (mismo patrón
+  que `spawn_load` del S2).
+- **Invalidación de carpeta:** Al abrir una carpeta (`open_path`) se (a)
+  incrementa un contador de generación `thumb_epoch` (`AtomicU64`), (b) se
+  drena la cola con `ThumbQueue::drain`, (c) se limpia el cache y las texturas.
+  Los workers capturan el epoch al extraer el path y lo re-verifican tras la
+  decodificación: si cambió, descartan el resultado. El `drain` es seguro
+  porque los workers liberan el lock mientras esperan (`Condvar`), a diferencia
+  de compartir un `Arc<Mutex<Receiver>>` (que mantendría el guard durante un
+  `recv()` bloqueante y deadlockearía con el drenado).
+- **Consecuencias:** Las miniaturas se generan en paralelo sin bloquear la UI;
+  al cambiar de carpeta, los decodes en vuelo se descartan y los paths en cola
+  se drenan (sin re-decodificar carpetas anteriores). `ThumbnailCache` sin
+  evicción es aceptable en Fase 2 ("decenas a cientos" de imágenes, ~37 KB por
+  miniatura); se revisará para carpetas muy grandes (virtualización/LRU de
+  miniaturas). Un path ya extraído por un worker y en decodificación no puede
+  cancelarse: su resultado se descarta por el epoch, no por el drain.
+- **Alternativas:** (a) Compartir el canal del S2 (mezcla de prioridades,
+  decodificaciones full-res desperdiciadas), (b) decodificar thumbnails en el
+  UI thread (freeze perceptible), (c) drenar un `Arc<Mutex<Receiver>>`
+  compartido (deadlock: el guard se mantiene durante `recv()` bloqueante),
+  (d) un worker que decodifica en serie (lento para carpetas grandes).
