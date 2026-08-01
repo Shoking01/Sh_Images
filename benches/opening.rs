@@ -20,23 +20,24 @@ fn setup_synthetic(format: ImageFormat, (w, h): (u32, u32)) -> (tempfile::TempDi
 }
 
 /// Mide `load_image` para una imagen ya generada en disco.
-fn bench_open(c: &mut Criterion, name: &str, dir: &tempfile::TempDir, path: &Path) {
+fn bench_open(c: &mut Criterion, name: &str, path: &Path) {
     c.bench_function(name, |b| {
         b.iter(|| {
             let ok = load_image(black_box(path)).is_ok();
             black_box(ok);
         })
     });
-    // `dir` se mantiene vivo hasta el final del grupo para que el archivo exista.
-    let _ = dir;
 }
 
 fn bench_opening(c: &mut Criterion) {
     for format in [ImageFormat::Png, ImageFormat::Jpeg] {
-        let ext = format.extensions_str()[0];
+        let ext = format
+            .extensions_str()
+            .first()
+            .expect("cada ImageFormat tiene al menos una extensión");
         for (label, res) in [("1080p", RES_1080P), ("4k", RES_4K), ("8k", RES_8K)] {
-            let (dir, path) = setup_synthetic(format, res);
-            bench_open(c, &format!("open_{ext}_{label}"), &dir, &path);
+            let (_dir, path) = setup_synthetic(format, res);
+            bench_open(c, &format!("open_{ext}_{label}"), &path);
         }
     }
 }
