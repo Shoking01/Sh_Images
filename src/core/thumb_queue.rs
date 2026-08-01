@@ -7,8 +7,9 @@
 //! deadlock.
 //!
 //! Invariantes:
-//! * `pop` devuelve `None` solo si la cola fue cerrada (`close`); nunca por
-//!   cola vacía (bloquea hasta que haya un path o se cierre).
+//! * `pop` devuelve `None` solo si la cola fue cerrada (`close`) **y** ya no
+//!   quedan paths pendientes; nunca por cola vacía (bloquea hasta que haya un
+//!   path o se cierre y se agote).
 //! * `drain` elimina todos los paths pendientes; los workers en `pop` siguen
 //!   bloqueados esperando trabajo nuevo.
 
@@ -71,7 +72,8 @@ impl ThumbQueue {
     ///
     /// # Returns
     /// * `Some(path)` cuando hay trabajo.
-    /// * `None` si la cola fue cerrada con [`ThumbQueue::close`].
+    /// * `None` si la cola fue cerrada con [`ThumbQueue::close`] y ya no quedan
+    ///   paths pendientes (los pendientes se drenan antes de devolver `None`).
     pub fn pop(&self) -> Option<PathBuf> {
         let mut inner = self.inner.queue.lock().unwrap_or_else(|p| p.into_inner());
         loop {
@@ -97,10 +99,15 @@ impl ThumbQueue {
 
     /// Cierra la cola: los workers bloqueados en `pop` salen con `None`.
     ///
-    /// Después de cerrar, `pop` devuelve `None` incluso si quedan paths sin
-    /// consumir.
+    /// El flag se marca bajo el mutex para que el check de `pop` + la espera
+    /// sean atómicos respecto al cierre (si se marcara fuera, un `pop` podría
+    /// leer `false` justo antes del `notify_all` y dormirse para siempre).
+    /// Después de cerrar, `pop` sigue devolviendo los paths pendientes hasta
+    /// agotarlos y recién entonces devuelve `None`.
     pub fn close(&self) {
+        let inner = self.inner.queue.lock().unwrap_or_else(|p| p.into_inner());
         self.inner.closed.store(true, Ordering::Release);
+        drop(inner);
         self.inner.cv.notify_all();
     }
 
