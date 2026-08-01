@@ -17,6 +17,10 @@ path = "src/main.rs"
 name = "opening"
 harness = false
 
+[[bench]]
+name = "navigation"
+harness = false
+
 [dependencies]
 # GUI — eframe/egui: framework immediate-mode nativo, fijado por Plan.md.
 eframe = "0.35"
