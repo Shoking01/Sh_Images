@@ -3,6 +3,10 @@
 //! Las imágenes se generan en memoria (patrón de gradiente determinista) y se
 //! guardan en un directorio temporal: repo limpio, reproducible, sin fixtures
 //! grandes commiteados (AGENTS.md §8.2 limita fixtures a <100KB).
+//!
+//! Cada bench compila este módulo por separado y usa un subconjunto distinto
+//! de helpers; por eso los items "sin uso" varían por crate y se permiten.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 
