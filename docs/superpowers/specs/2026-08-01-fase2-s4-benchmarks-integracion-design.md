@@ -112,8 +112,8 @@ Cinco flujos, uno por función:
 1. **`flujo_apertura_completo`**: carpeta temp con PNG → `Navigation::from_folder` → `current_path` correcto → `load_image` → `ImageCache::insert` → `get` → verificar dimensiones (equivale a abrir→decodificar→cachear).
 2. **`flujo_navegacion_circular`**: N imágenes → `next()` hasta el final → vuelve al primero (circular) → `prev()` correcto → `neighbor_paths` devuelve N±1.
 3. **`flujo_zoom_pan_fit`**: `ViewTransform::new(img, viewport)` → `apply_zoom_at` (zoom in) → `pan_by` → `fit()` → verificar que `fit()` restaura.
-4. **`flujo_imagen_corrupta_no_crash`**: `corrupt_png_path` → `load_image` devuelve `Err(Decode)` sin panic; carpeta vacía → `from_folder` devuelve `Err`.
-5. **`flujo_configuracion_persistencia`**: `Settings::default` → `save` → modificar campo → `save` de nuevo → `load` → verificar que carga el último valor. Adicionalmente verificar que `ShImagesApp::load_settings()` (que re-lee del path real de config) devuelve los valores cargados — equivale a cerrar/reabrir la app.
+4. **`flujo_imagen_corrupta_no_crash`**: `corrupt_png_path` → `load_image` devuelve `Err(Decode)` sin panic; carpeta inexistente → `from_folder` devuelve `Err(Io)`; carpeta sin imágenes soportadas (solo `.txt`) → `from_folder` devuelve `Ok` con `images` vacía y `current_path() == None`.
+5. **`flujo_configuracion_persistencia`**: `Settings::default` → `save` → modificar campo → `save` de nuevo → `load` → verificar que carga el último valor, todo con paths en `tempfile` (equivale a cerrar/reabrir sin tocar el config real del usuario). **No** se invoca `ShImagesApp::load_settings()`, porque lee del path real de config (`settings_path()`) y escribiría en el HOME del usuario durante el test.
 
 ## 4. Cargo.toml
 
