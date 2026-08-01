@@ -324,13 +324,7 @@ impl Deref for CacheEntryRef<'_> {
 /// Coste de una `DynamicImage` en bytes (dimensiones × canales).
 fn estimate_bytes(image: &DynamicImage) -> u64 {
     let (w, h) = (image.width() as u64, image.height() as u64);
-    let bpp = match image.color() {
-        image::ColorType::Rgb8 => 3,
-        image::ColorType::Rgba8 => 4,
-        image::ColorType::L8 => 1,
-        image::ColorType::La8 => 2,
-        _ => 4, // fallback conservador
-    };
+    let bpp = image.color().bytes_per_pixel() as u64;
     w.saturating_mul(h).saturating_mul(bpp)
 }
 
@@ -351,6 +345,14 @@ mod tests {
         assert_eq!(estimate_bytes(&rgba(16, 16)), 16 * 16 * 4);
         let rgb = DynamicImage::ImageRgb8(image::RgbImage::new(16, 16));
         assert_eq!(estimate_bytes(&rgb), 16 * 16 * 3);
+    }
+
+    #[test]
+    fn estimate_bytes_counts_high_depth_and_float_channels() {
+        let rgb16 = DynamicImage::ImageRgb16(image::ImageBuffer::new(4, 4));
+        let rgba16 = DynamicImage::ImageRgba16(image::ImageBuffer::new(4, 4));
+        assert_eq!(estimate_bytes(&rgb16), 4 * 4 * 6);
+        assert_eq!(estimate_bytes(&rgba16), 4 * 4 * 8);
     }
 
     #[test]
