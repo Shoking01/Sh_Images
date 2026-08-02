@@ -1,0 +1,8 @@
+---
+source: src/core/view.rs
+expression: "lines.join(\"\\n\")"
+---
+rot=0 fit=1.0000 origin=(0.0000,0.0000)
+rot=1 fit=0.5000 origin=(375.0000,0.0000)
+rot=2 fit=1.0000 origin=(0.0000,0.0000)
+rot=3 fit=0.5000 origin=(375.0000,0.0000)

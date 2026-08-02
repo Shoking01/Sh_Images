@@ -15,6 +15,21 @@ pub fn apply(ctx: &egui::Context, name: &str) {
     }
 }
 
+/// Devuelve el tema opuesto al dado, para alternar en la UI.
+///
+/// `"dark"` → `"light"`, `"light"` → `"dark"`. Cualquier otro valor cae a
+/// `"dark"` (con warning, para no perder el estado de tema desconocido).
+pub fn toggle(name: &str) -> &'static str {
+    match name {
+        "dark" => "light",
+        "light" => "dark",
+        other => {
+            tracing::warn!(theme = %other, "unknown theme on toggle; falling back to dark");
+            "dark"
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -38,5 +53,20 @@ mod tests {
         let ctx = egui::Context::default();
         apply(&ctx, "unknown");
         assert!(ctx.global_style().visuals.dark_mode);
+    }
+
+    #[test]
+    fn toggle_dark_to_light() {
+        assert_eq!(toggle("dark"), "light");
+    }
+
+    #[test]
+    fn toggle_light_to_dark() {
+        assert_eq!(toggle("light"), "dark");
+    }
+
+    #[test]
+    fn toggle_unknown_falls_back_to_dark() {
+        assert_eq!(toggle("solarized"), "dark");
     }
 }

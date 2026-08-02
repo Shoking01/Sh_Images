@@ -65,6 +65,8 @@ pub struct ViewTransform {
     pub image_size: Vec2,
     /// Tamaño del canvas (área visible) en píxeles de pantalla.
     pub viewport: Vec2,
+    /// Rotación de la imagen en cuartos de vuelta: 0=0°, 1=90°CW, 2=180°, 3=270°CW.
+    pub rotation: u8,
 }
 
 impl ViewTransform {
@@ -75,29 +77,38 @@ impl ViewTransform {
             pan: Vec2::ZERO,
             image_size,
             viewport,
+            rotation: 0,
         };
         t.fit();
         t
     }
 
+    /// Tamaño efectivo de la imagen bajo la rotación actual (dims intercambiadas
+    /// si la rotación es impar).
+    pub fn effective_size(&self) -> Vec2 {
+        if self.rotation % 2 == 1 {
+            Vec2::new(self.image_size.y, self.image_size.x)
+        } else {
+            self.image_size
+        }
+    }
+
     /// Zoom que hace caber la imagen completa en el viewport.
     pub fn fit_zoom(&self) -> f32 {
-        if self.image_size.x <= 0.0
-            || self.image_size.y <= 0.0
-            || self.viewport.x <= 0.0
-            || self.viewport.y <= 0.0
-        {
+        let size = self.effective_size();
+        if size.x <= 0.0 || size.y <= 0.0 || self.viewport.x <= 0.0 || self.viewport.y <= 0.0 {
             return 1.0;
         }
-        let zx = self.viewport.x / self.image_size.x;
-        let zy = self.viewport.y / self.image_size.y;
+        let zx = self.viewport.x / size.x;
+        let zy = self.viewport.y / size.y;
         zx.min(zy)
     }
 
     /// Esquina superior izquierda de la imagen en coordenadas de pantalla.
     pub fn image_origin_screen(&self) -> Vec2 {
         let center = self.viewport.mul(0.5);
-        let half = self.image_size.mul(self.zoom * 0.5);
+        let size = self.effective_size();
+        let half = size.mul(self.zoom * 0.5);
         center.sub(half).add(self.pan)
     }
 
@@ -134,6 +145,28 @@ impl ViewTransform {
     /// Actualiza el tamaño del canvas.
     pub fn set_viewport(&mut self, viewport: Vec2) {
         self.viewport = viewport;
+    }
+
+    /// Rota 90° en sentido horario y re-aplica fit (pan a 0).
+    pub fn rotate_cw(&mut self) {
+        self.rotation = (self.rotation + 1) % 4;
+        self.fit();
+    }
+
+    /// Rota 90° en sentido antihorario y re-aplica fit (pan a 0).
+    pub fn rotate_ccw(&mut self) {
+        self.rotation = (self.rotation + 3) % 4;
+        self.fit();
+    }
+}
+
+impl ViewTransform {
+    /// UV (normalizado 0..1) del vértice `corner` (0=TL,1=TR,2=BR,3=BL) bajo la
+    /// rotación `rotation` (cuartos de vuelta CW). Permite pintar el mesh rotado.
+    pub fn rotated_uv(corner: u8, rotation: u8) -> (f32, f32) {
+        const UVS: [(f32, f32); 4] = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let idx = ((corner as usize) + 4 - (rotation as usize % 4)) % 4;
+        UVS[idx]
     }
 }
 
@@ -227,5 +260,86 @@ mod tests {
         let origin = t.image_origin_screen();
         assert!(approx(origin.x, expected_origin.x));
         assert!(approx(origin.y, expected_origin.y));
+    }
+
+    #[test]
+    fn rotate_cw_cycles_0_to_3_and_back_to_0() {
+        let mut t = ViewTransform::new(Vec2::new(100.0, 200.0), Vec2::new(500.0, 500.0));
+        assert_eq!(t.rotation, 0);
+        t.rotate_cw();
+        assert_eq!(t.rotation, 1);
+        t.rotate_cw();
+        assert_eq!(t.rotation, 2);
+        t.rotate_cw();
+        assert_eq!(t.rotation, 3);
+        t.rotate_cw();
+        assert_eq!(t.rotation, 0);
+    }
+
+    #[test]
+    fn rotate_ccw_is_inverse_of_cw() {
+        let mut t = ViewTransform::new(Vec2::new(100.0, 200.0), Vec2::new(500.0, 500.0));
+        t.rotate_ccw();
+        assert_eq!(t.rotation, 3);
+        t.rotate_ccw();
+        t.rotate_ccw();
+        assert_eq!(t.rotation, 1);
+        t.rotate_ccw();
+        assert_eq!(t.rotation, 0);
+    }
+
+    #[test]
+    fn fit_zoom_swaps_dimensions_on_odd_rotation() {
+        // Viewport NO cuadrado (2:1): al rotar la imagen (también 2:1) el lado
+        // que limita el fit cambia y el fit se reduce.
+        let mut t = ViewTransform::new(Vec2::new(1000.0, 500.0), Vec2::new(1000.0, 500.0));
+        let fit0 = t.fit_zoom(); // min(1000/1000, 500/500) = 1.0
+        t.rotate_cw();
+        let fit90 = t.fit_zoom(); // min(1000/500, 500/1000) = 0.5
+        assert!(approx(fit90, 0.5));
+        assert!(approx(fit0, 1.0));
+        t.rotate_cw();
+        assert!(approx(t.fit_zoom(), fit0), "180° vuelve a las mismas dims");
+    }
+
+    #[test]
+    fn rotating_resets_to_fit_and_centers() {
+        let mut t = ViewTransform::new(Vec2::new(1000.0, 1000.0), Vec2::new(500.0, 500.0));
+        t.apply_zoom_at(Vec2::new(250.0, 250.0), 3.0);
+        t.pan_by(Vec2::new(40.0, -20.0));
+        t.rotate_cw();
+        assert!(approx(t.zoom, t.fit_zoom()), "rota → fit");
+        assert_eq!(t.pan, Vec2::ZERO, "rota → pan 0");
+    }
+
+    #[test]
+    fn rotated_uv_permutes_corners() {
+        // corner 0 (top-left) en rotación 1 (90°CW) debe usar el uv del corner 3.
+        assert_eq!(ViewTransform::rotated_uv(0, 0), (0.0, 0.0));
+        assert_eq!(ViewTransform::rotated_uv(1, 0), (1.0, 0.0));
+        assert_eq!(ViewTransform::rotated_uv(0, 1), (0.0, 1.0));
+        assert_eq!(ViewTransform::rotated_uv(1, 1), (0.0, 0.0));
+        assert_eq!(ViewTransform::rotated_uv(2, 2), (0.0, 0.0));
+        assert_eq!(ViewTransform::rotated_uv(0, 3), (1.0, 0.0));
+    }
+
+    /// Congela la matemática de rotación (fit_zoom/origin por cuarto de vuelta).
+    #[test]
+    fn snapshot_rotation_math() {
+        // Viewport NO cuadrado (2:1) para que el fit varíe con la rotación.
+        let mut lines = Vec::new();
+        let mut t = ViewTransform::new(Vec2::new(1000.0, 500.0), Vec2::new(1000.0, 500.0));
+        for _ in 0..4 {
+            let o = t.image_origin_screen();
+            lines.push(format!(
+                "rot={} fit={:.4} origin=({:.4},{:.4})",
+                t.rotation,
+                t.fit_zoom(),
+                o.x,
+                o.y
+            ));
+            t.rotate_cw();
+        }
+        insta::assert_snapshot!(lines.join("\n"));
     }
 }

@@ -91,3 +91,62 @@
   UI thread (freeze perceptible), (c) drenar un `Arc<Mutex<Receiver>>`
   compartido (deadlock: el guard se mantiene durante `recv()` bloqueante),
   (d) un worker que decodifica en serie (lento para carpetas grandes).
+
+## ADR-007: Centralización de acciones vía enum `Action`
+
+- **Contexto:** En la Fase 3, toolbar (mouse), menú y atajos de teclado
+  (teclado) deben disparar los mismos efectos sobre la app. Tener cada path
+  llamando a `open_dialog()`, `navigate()`, etc. directamente produce N copias
+  de la lógica, dispersión de `tracing::info!` de auditoría y difficultad para
+  extender/remapear acciones.
+- **Decisión:** Un enum `core::actions::Action` con 10 variantes
+  (`Open`, `Prev`, `Next`, `RotateCw`, `RotateCcw`, `Fit`, `Fullscreen`,
+  `ToggleTheme`, `ToggleSidebar`, `EditShortcuts`) y un único método
+  `dispatch(Action)` en `app.rs`. Las tres fuentes (toolbar::show devuelve
+  `Option<Action>`; el menú lo invoca directamente; `handle_shortcuts` mapea
+  la tecla al `Action` vía `ShortcutMap::action_for`) reducen a un único
+  punto de efecto. Cada variante conoce su `label()` y su `default_shortcut()`,
+  y `Action::all()` las enumera en orden estable para la UI del editor.
+- **Consecuencias:** La lógica de un efecto ("abrir dialogo", "toggle tema")
+  vive una sola vez, en `dispatch`. Añadir una nueva acción (e.g. `Slideshow`)
+  es: añadir variante a `Action`, un `match` arm en `dispatch`, una entrada en
+  `default_shortcut()` opcional. El testing se simplifica: `Action` es puro y
+  testeable; `dispatch` solo se cubre con integration tests de la app. El menú
+  y toolbar pueden iterar sobre `Action::all()` sin acoplarse a un catálogo
+  separado.
+- **Alternativas:** (a) Devolver callbacks/closures desde cada fuente de
+  acción (cierres opacos, no inspeccionables ni serializables), (b) un string
+  `&'static str` por acción (no type-safe, errores en runtime), (c) mantener
+  la lógica dispersa y aceptar la duplicación (acoplamiento N×N de las fuentes
+  a los efectos).
+
+## ADR-008: Rotación visual vía mesh con UVs permutados (sin re-decodificar)
+
+- **Contexto:** La Fase 3 añade rotación 90° CW/CCW sobre la imagen actual.
+  Rotar la textura en GPU es trivial (`egui::Mesh` con UVs permutadas); rotar
+  re-descodificando el JPEG/PNG en memoria es costoso y no aporta (la imagen
+  en disco no cambia, solo la presentación). El `Viewer` ya pintaba con
+  `ui.painter().image(...)` (un solo quad, UV `(0,0)..(1,1)`).
+- **Decisión:** Añadir `rotation: u8` (0..=3) y `effective_size()` (intercambia
+  dimensiones si `rotation` es par/impar) a `ViewTransform`. La rotación
+  re-aplica `fit()` (resetea zoom y pan, evita que una imagen rotada salga
+  del canvas). `ViewTransform::rotated_uv(corner, rotation)` mapea cada esquina
+  TL/TR/BR/BL al UV permutado. El viewer decide: si `rotation == 0`, usa el
+  `painter.image` (camino barato); en otro caso, construye un `egui::Mesh`
+  con 4 vértices y 6 índices, asigna los UVs permutados a las esquinas y lo
+  añade al painter con `Shape::mesh`.
+- **Consecuencias:** Cero coste de decodificación: la imagen rotada se renderiza
+  desde la misma textura GPU. Los tests de math (`fit_zoom_swaps_dimensions_on_odd_rotation`,
+  `rotated_uv_permutes_corners`, snapshot `snapshot_rotation_math`) verifican
+  la corrección sobre imágenes NO cuadradas (viewport 1000×500 con imagen
+  1000×500: fit cambia de 1.0 a 0.5 al rotar 90°). El viewer paga un mesh de
+  4 vértices solo cuando hay rotación; el camino sin rotación sigue siendo el
+  `painter.image` de Fase 1. Filtros/operaciones que necesiten la imagen
+  rotada como bitmap (exportar a PNG rotado) no están cubiertos por esta
+  decisión; eso sería Fase X.
+- **Alternativas:** (a) Re-decodificar la imagen y aplicar `image::imageops::rotate90`
+  (coste lineal en pixels; latencia de 100–500 ms para una imagen 4K — viola
+  AGENTS.md §6.2 de "tiempo de rotación < 50 ms"), (b) mantener N texturas
+  pre-rotadas en GPU (desperdicia memoria, N=4 copias), (c) implementar la
+  rotación solo en math de viewer (`Painter::with_clip_rect` + `rotate` shadres)
+  más complejo y propenso a errores de muestreo en los bordes.

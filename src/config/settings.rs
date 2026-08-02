@@ -6,6 +6,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::shortcuts::ShortcutMap;
 use crate::utils::errors::{Result, ShImagesError};
 
 /// Preferencias persistentes de la aplicación.
@@ -17,6 +18,9 @@ pub struct Settings {
     /// Tema visual de la UI: `"dark"` | `"light"`.
     #[serde(default)]
     pub theme: String,
+    /// Atajos de teclado configurables (default: los de `ShortcutMap::defaults`).
+    #[serde(default)]
+    pub shortcuts: ShortcutMap,
 }
 
 impl Default for Settings {
@@ -24,6 +28,7 @@ impl Default for Settings {
         Self {
             cache_memory_limit_mb: 512,
             theme: "dark".to_string(),
+            shortcuts: ShortcutMap::defaults(),
         }
     }
 }
@@ -122,6 +127,7 @@ mod tests {
         let settings = Settings {
             cache_memory_limit_mb: 256,
             theme: "light".to_string(),
+            shortcuts: ShortcutMap::defaults(),
         };
 
         settings.save(&path).unwrap();
@@ -150,6 +156,7 @@ mod tests {
         let second = Settings {
             cache_memory_limit_mb: 128,
             theme: "dark".to_string(),
+            shortcuts: ShortcutMap::defaults(),
         };
 
         second.save(&path).unwrap();
