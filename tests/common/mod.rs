@@ -35,6 +35,23 @@ pub fn make_folder_with_images(n: usize) -> (tempfile::TempDir, Vec<PathBuf>) {
     (dir, paths)
 }
 
+/// Crea una carpeta temp con `n` imágenes `.jpg` sintéticas de `w`x`h`.
+///
+/// Devuelve `(TempDir, rutas ordenadas)`. `TempDir` se elimina al dropear.
+pub fn make_folder_with_rect_images(n: usize, w: u32, h: u32) -> (tempfile::TempDir, Vec<PathBuf>) {
+    let dir = tempdir().expect("tempdir en test");
+    let mut paths = Vec::with_capacity(n);
+    for i in 0..n {
+        let path = dir.path().join(format!("img_{i:04}.jpg"));
+        gradient_image(w, h)
+            .save_with_format(&path, ImageFormat::Jpeg)
+            .expect("guardar imagen sintética");
+        paths.push(path);
+    }
+    paths.sort();
+    (dir, paths)
+}
+
 /// Escribe un archivo `.png` con bytes que NO son una imagen válida.
 pub fn corrupt_png_path(dir: &Path) -> PathBuf {
     let path = dir.join("corrupt.png");

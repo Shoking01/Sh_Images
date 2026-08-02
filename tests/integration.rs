@@ -16,7 +16,9 @@ use sh_images::core::preload::{preload_targets, PRELOAD_DEPTH};
 use sh_images::core::shortcuts::ShortcutMap;
 use sh_images::core::view::{Vec2, ViewTransform};
 
-use common::{corrupt_png_path, empty_png_path, gif_path, make_folder_with_images};
+use common::{
+    corrupt_png_path, empty_png_path, gif_path, make_folder_with_images, make_folder_with_rect_images,
+};
 
 /// Flujo 1 — Apertura: abrir → decodificar → cachear.
 ///
@@ -191,4 +193,39 @@ fn flujo_configuracion_persistencia() {
     let loaded = Settings::load(&path).expect("cargar settings");
     assert_eq!(loaded, modified, "persiste el último valor guardado");
     assert_eq!(loaded.theme, "light");
+}
+
+/// Flujo 6 — Rotación: abrir → rotar → verificar transform (sin GUI).
+///
+/// Equivale a "abrir imagen → Ctrl+] (rotate CW) → ver que queda en fit con
+/// dimensiones efectivas intercambiadas". Se testea la math pura de core.
+#[test]
+fn flujo_rotacion_visual() {
+    // Imagen NO cuadrada (80x40) y viewport NO cuadrado (600x300): la rotación
+    // debe intercambiar dims y cambiar el fit.
+    let (_dir, paths) = make_folder_with_rect_images(1, 80, 40);
+    let target = &paths[0];
+
+    let image = load_image(target).expect("decodificar imagen sintética");
+    let (w, h) = image.dimensions();
+    assert_eq!((w, h), (80, 40), "imagen sintética no cuadrada");
+
+    // "Abrir": el transform se crea en fit con las dimensiones reales.
+    let mut t = ViewTransform::new(Vec2::new(w as f32, h as f32), Vec2::new(600.0, 300.0));
+    assert_eq!(t.rotation, 0);
+    let fit0 = t.fit_zoom(); // min(600/80, 300/40) = min(7.5, 7.5) = 7.5
+
+    // "Rotar 90° CW": dimensiones efectivas intercambiadas y fit recomputado.
+    t.rotate_cw();
+    assert_eq!(t.rotation, 1);
+    let eff = t.effective_size();
+    assert_eq!((eff.x as u32, eff.y as u32), (h, w), "dims intercambiadas");
+    // min(600/40, 300/80) = min(15.0, 3.75) = 3.75 ≠ 7.5
+    assert!((t.fit_zoom() - fit0).abs() > 1e-6, "fit cambia con rotación");
+    assert_eq!(t.pan, Vec2::ZERO, "rota → pan 0");
+
+    // "Rotar 90° CCW" restaura la orientación original.
+    t.rotate_ccw();
+    assert_eq!(t.rotation, 0);
+    assert!((t.fit_zoom() - fit0).abs() < 1e-3, "vuelve al fit original");
 }
