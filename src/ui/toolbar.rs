@@ -25,41 +25,41 @@ pub fn show(
     let mut clicked = None;
     egui::Panel::top("toolbar").exact_size(30.0).show(ui, |ui| {
         ui.horizontal(|ui| {
-            if toolbar_button(ui, "←", Action::Prev, shortcuts) {
+            if toolbar_button(ui, "<", Action::Prev, shortcuts) {
                 clicked = Some(Action::Prev);
             }
-            if toolbar_button(ui, "→", Action::Next, shortcuts) {
+            if toolbar_button(ui, ">", Action::Next, shortcuts) {
                 clicked = Some(Action::Next);
             }
 
             ui.separator();
 
-            if toolbar_button(ui, "↻", Action::RotateCw, shortcuts) {
+            if toolbar_button(ui, "Rotar", Action::RotateCw, shortcuts) {
                 clicked = Some(Action::RotateCw);
             }
-            if toolbar_button(ui, "⤢", Action::Fit, shortcuts) {
+            if toolbar_button(ui, "Fit", Action::Fit, shortcuts) {
                 clicked = Some(Action::Fit);
             }
 
             ui.separator();
 
-            if toolbar_button(ui, "⛶", Action::Fullscreen, shortcuts) {
+            if toolbar_button(ui, "Full", Action::Fullscreen, shortcuts) {
                 clicked = Some(Action::Fullscreen);
             }
-            if toolbar_button(ui, "◐", Action::ToggleTheme, shortcuts) {
+            if toolbar_button(ui, "Tema", Action::ToggleTheme, shortcuts) {
                 clicked = Some(Action::ToggleTheme);
             }
-            if toolbar_button(ui, "☰", Action::ToggleSidebar, shortcuts) {
+            if toolbar_button(ui, "Barra", Action::ToggleSidebar, shortcuts) {
                 clicked = Some(Action::ToggleSidebar);
             }
-            if toolbar_button(ui, "⚙", Action::EditShortcuts, shortcuts) {
+            if toolbar_button(ui, "Atajos", Action::EditShortcuts, shortcuts) {
                 clicked = Some(Action::EditShortcuts);
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(format!("Tema: {theme_name}"));
                 if is_fullscreen {
-                    ui.colored_label(egui::Color32::YELLOW, "● Fullscreen");
+                    ui.colored_label(egui::Color32::YELLOW, "[*] Fullscreen");
                 }
             });
         });
