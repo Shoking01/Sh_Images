@@ -85,38 +85,38 @@ sh_images/
 ## 4. Features por Fase
 
 ### Fase 0 — Fundamentos (Semana 1)
-- [ ] Setup del proyecto Cargo con `eframe` y `egui`
-- [ ] Estructura de carpetas y módulos base
-- [ ] Sistema de errores (`thiserror`)
-- [ ] Configuración básica (TOML)
-- [ ] CI/CD: GitHub Actions con `cargo check`, `cargo clippy`, `cargo test`
-- [ ] **Definición de métricas base de rendimiento** (tiempo de apertura, uso de RAM)
+- [x] Setup del proyecto Cargo con `eframe` y `egui`
+- [x] Estructura de carpetas y módulos base
+- [x] Sistema de errores (`thiserror`)
+- [x] Configuración básica (TOML)
+- [x] CI/CD: GitHub Actions con `cargo check`, `cargo clippy`, `cargo test`
+- [x] **Definición de métricas base de rendimiento** (tiempo de apertura, uso de RAM)
 
 ### Fase 1 — Visor Básico (Semana 2)
-- [ ] Abrir imagen desde diálogo de archivos (`rfd`)
-- [ ] Renderizar imagen en el canvas de `egui`
-- [ ] Zoom básico (in/out con rueda del ratón)
-- [ ] Pan/drag con click+sostener
-- [ ] Ajuste a ventana (fit to window)
-- [ ] Navegación con flechas (← →) entre imágenes de la misma carpeta
-- [ ] **Tests unitarios para**: decodificación, zoom math, navegación de archivos
+- [x] Abrir imagen desde diálogo de archivos (`rfd`)
+- [x] Renderizar imagen en el canvas de `egui`
+- [x] Zoom básico (in/out con rueda del ratón)
+- [x] Pan/drag con click+sostener
+- [x] Ajuste a ventana (fit to window)
+- [x] Navegación con flechas (← →) entre imágenes de la misma carpeta
+- [x] **Tests unitarios para**: decodificación, zoom math, navegación de archivos
 
 ### Fase 2 — Cache y Rendimiento (Semana 3)
-- [ ] LRU cache para imágenes decodificadas
-- [ ] Carga asíncrona con threads workers
-- [ ] Pre-carga de imagen siguiente/anterior
-- [ ] Generación de miniaturas para la barra lateral
-- [ ] **Benchmarks**: tiempo de carga, uso de memoria, FPS al hacer zoom
-- [ ] **Tests de integración**: flujo completo de apertura → navegación → cierre
+- [x] LRU cache para imágenes decodificadas
+- [x] Carga asíncrona con threads workers
+- [x] Pre-carga de imagen siguiente/anterior
+- [x] Generación de miniaturas para la barra lateral
+- [x] **Benchmarks**: tiempo de carga, uso de memoria, FPS al hacer zoom
+- [x] **Tests de integración**: flujo completo de apertura → navegación → cierre
 
 ### Fase 3 — UI/UX Polish (Semana 4)
-- [ ] Barra de herramientas con iconos
-- [ ] Modo pantalla completa (F11)
-- [ ] Rotación de imagen (90° CW/CCW)
-- [ ] Información de imagen (dimensiones, tamaño de archivo)
-- [ ] Tema oscuro/claro
-- [ ] Atajos de teclado configurables
-- [ ] **Tests de UI**: snapshot testing con `insta` para verificar que el UI no regresa
+- [x] Barra de herramientas con iconos
+- [x] Modo pantalla completa (F11)
+- [x] Rotación de imagen (90° CW/CCW)
+- [x] Información de imagen (dimensiones, tamaño de archivo)
+- [x] Tema oscuro/claro
+- [x] Atajos de teclado configurables
+- [x] **Tests de UI**: snapshot testing con `insta` para verificar que el UI no regresa
 
 ### Fase 4 — Metadatos Avanzados (Semana 5)
 - [ ] Lectura de metadatos EXIF

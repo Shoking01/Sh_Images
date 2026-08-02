@@ -4,8 +4,9 @@ Visor de imágenes ligero, rápido y nativo en Rust (`egui` + `eframe`).
 
 ## Estado
 
-En desarrollo — Fase 0 (fundamentos). Ventana base funcional; carga de imágenes
-en la UI llega en Fase 1.
+En desarrollo — Fase 4 (metadatos avanzados) pendiente. Completas: Fases 0–3
+(fundamentos, visor básico, cache y rendimiento, UI/UX polish). Ver `Plan.md`
+para el roadmap.
 
 ## Requisitos
 
