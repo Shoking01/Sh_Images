@@ -13,12 +13,7 @@ use tempfile::tempdir;
 pub fn gradient_image(w: u32, h: u32) -> DynamicImage {
     let mut img = RgbaImage::new(w, h);
     for (x, y, pixel) in img.enumerate_pixels_mut() {
-        *pixel = Rgba([
-            (x % 256) as u8,
-            (y % 256) as u8,
-            ((x + y) % 256) as u8,
-            255,
-        ]);
+        *pixel = Rgba([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8, 255]);
     }
     DynamicImage::ImageRgba8(img)
 }
