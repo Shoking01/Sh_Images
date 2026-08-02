@@ -38,19 +38,42 @@ pub fn show(
 
     // Rectángulo de la imagen en pantalla (origin es relativo al canvas).
     let origin = transform.image_origin_screen();
-    let w = transform.image_size.x * transform.zoom;
-    let h = transform.image_size.y * transform.zoom;
+    let effective = transform.effective_size();
+    let w = effective.x * transform.zoom;
+    let h = effective.y * transform.zoom;
     let image_rect = egui::Rect::from_min_size(
         egui::pos2(rect.min.x + origin.x, rect.min.y + origin.y),
         egui::vec2(w, h),
     );
 
-    ui.painter().image(
-        texture.id(),
-        image_rect,
-        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-        egui::Color32::WHITE,
-    );
+    if transform.rotation == 0 {
+        // Camino sin rotación: un solo `painter.image` (más barato que un mesh).
+        ui.painter().image(
+            texture.id(),
+            image_rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else {
+        // Mesh rotado: 4 vértices en las esquinas del rect con UVs permutados.
+        let corners = [
+            image_rect.left_top(),
+            image_rect.right_top(),
+            image_rect.right_bottom(),
+            image_rect.left_bottom(),
+        ];
+        let mut mesh = egui::Mesh::with_texture(texture.id());
+        for (i, pos) in corners.iter().enumerate() {
+            let (u, v) = ViewTransform::rotated_uv(i as u8, transform.rotation);
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: *pos,
+                uv: egui::pos2(u, v),
+                color: egui::Color32::WHITE,
+            });
+        }
+        mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+        ui.painter().add(egui::Shape::mesh(mesh));
+    }
 
     let mut result = ViewResponse::default();
 
