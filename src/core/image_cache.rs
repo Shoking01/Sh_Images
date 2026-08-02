@@ -266,6 +266,14 @@ impl ImageCache {
         })
     }
 
+    /// `true` si `path` está en el cache, sin reordenar la lista LRU ni contar hits.
+    ///
+    /// A diferencia de `get`, no marca la entrada como recién usada y no altera
+    /// `hit_ratio`: sirve para "solo preguntar si está" (p.ej. planificar pre-carga).
+    pub fn contains(&self, path: &Path) -> bool {
+        self.lock().map.contains_key(path)
+    }
+
     /// Número de entradas en el cache.
     pub fn len(&self) -> usize {
         self.lock().map.len()
@@ -536,5 +544,40 @@ mod tests {
         assert!(cache.get(Path::new("b.png")).is_none()); // miss
         let ratio = cache.hit_ratio();
         assert!((ratio - 2.0 / 3.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn contains_is_true_for_cached_path() {
+        let cache = ImageCache::new(1);
+        cache.insert(PathBuf::from("a.png"), rgba(16, 16));
+        assert!(cache.contains(Path::new("a.png")));
+    }
+
+    #[test]
+    fn contains_is_false_for_missing_path() {
+        let cache = ImageCache::new(1);
+        assert!(!cache.contains(Path::new("a.png")));
+    }
+
+    #[test]
+    fn contains_does_not_reorder_lru() {
+        let cache = ImageCache::new(1); // 1 MiB = 4 × 256 KiB
+        for name in ["a.png", "b.png", "c.png", "d.png"] {
+            cache.insert(PathBuf::from(name), rgba(256, 256));
+        }
+        // Solo preguntar por "a" (la más vieja) NO debe moverla a MRU.
+        assert!(cache.contains(Path::new("a.png")));
+        let res = cache.insert(PathBuf::from("e.png"), rgba(256, 256));
+        // Sigue evictándose a (LRU), no b.
+        assert_eq!(res.evicted_keys, vec![PathBuf::from("a.png")]);
+    }
+
+    #[test]
+    fn contains_does_not_count_hits() {
+        let cache = ImageCache::new(1);
+        cache.insert(PathBuf::from("a.png"), rgba(16, 16));
+        assert!(cache.contains(Path::new("a.png")));
+        assert!(cache.contains(Path::new("a.png")));
+        assert_eq!(cache.hit_ratio(), 0.0);
     }
 }

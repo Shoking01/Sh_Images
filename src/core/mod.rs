@@ -4,5 +4,8 @@ pub mod exif;
 pub mod image_cache;
 pub mod image_loader;
 pub mod navigation;
+pub mod preload;
+pub mod thumb_queue;
+pub mod thumbnail_cache;
 pub mod thumbnail_gen;
 pub mod view;
