@@ -29,6 +29,10 @@ harness = false
 name = "image_cache"
 harness = false
 
+[[bench]]
+name = "preload"
+harness = false
+
 [dependencies]
 # GUI — eframe/egui: framework immediate-mode nativo, fijado por Plan.md.
 eframe = "0.35"
