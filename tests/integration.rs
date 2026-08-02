@@ -23,7 +23,7 @@ use common::{corrupt_png_path, empty_png_path, gif_path, make_folder_with_images
 /// navegación de la carpeta, se decodifica la imagen actual y se cachea.
 #[test]
 fn flujo_apertura_completo() {
-    let (dir, paths) = make_folder_with_images(3);
+    let (_dir, paths) = make_folder_with_images(3);
     let target = &paths[1];
 
     let nav = Navigation::from_folder(target, SUPPORTED_EXTENSIONS).expect("carpeta válida");
@@ -54,8 +54,6 @@ fn flujo_apertura_completo() {
         targets.iter().all(|p| !cache.contains(p)),
         "vecinos aún no cacheados"
     );
-
-    let _ = dir;
 }
 
 /// Flujo 2 — Navegación: forward/backward circular + orden correcto.
@@ -99,15 +97,17 @@ fn flujo_navegacion_circular() {
 fn flujo_zoom_pan_fit() {
     let mut t = ViewTransform::new(Vec2::new(2000.0, 1000.0), Vec2::new(500.0, 500.0));
     let fit = t.fit_zoom();
-
-    // Zoom in en un punto ancla.
-    t.apply_zoom_at(Vec2::new(250.0, 250.0), 2.0);
-    assert!(t.zoom > fit, "zoom in supera el fit");
-
-    // El punto ancla queda fijo tras el zoom.
     let anchor = Vec2::new(250.0, 250.0);
+
+    // Capturar el punto de imagen bajo el ancla ANTES del zoom.
     let origin = t.image_origin_screen();
     let image_point = anchor.sub(origin).div(t.zoom);
+
+    // Zoom in en un punto ancla.
+    t.apply_zoom_at(anchor, 2.0);
+    assert!(t.zoom > fit, "zoom in supera el fit");
+
+    // El punto de imagen capturado antes debe mapear al mismo ancla de pantalla.
     let new_origin = t.image_origin_screen();
     let new_screen = new_origin.add(image_point.mul(t.zoom));
     assert!((new_screen.x - anchor.x).abs() < 1e-3, "ancla fija en x");
