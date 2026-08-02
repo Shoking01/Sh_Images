@@ -1,0 +1,14 @@
+---
+source: src/core/shortcuts.rs
+expression: "strings.join(\"\\n\")"
+---
+Abrir -> Ctrl+O
+Anterior -> ←
+Siguiente -> →
+Rotar 90° CW -> Ctrl+]
+Rotar 90° CCW -> Ctrl+[
+Ajustar a la ventana -> F
+Pantalla completa -> F11
+Cambiar tema -> Ctrl+T
+Mostrar/ocultar barra lateral -> H
+Configurar atajos -> Ctrl+K

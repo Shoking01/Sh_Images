@@ -1,0 +1,43 @@
+---
+source: src/core/shortcuts.rs
+expression: s
+---
+[bindings.open]
+key = "key_o"
+modifiers = "ctrl"
+
+[bindings.prev]
+key = "arrow_left"
+modifiers = "none"
+
+[bindings.next]
+key = "arrow_right"
+modifiers = "none"
+
+[bindings.rotate_cw]
+key = "close_bracket"
+modifiers = "ctrl"
+
+[bindings.rotate_ccw]
+key = "open_bracket"
+modifiers = "ctrl"
+
+[bindings.fit]
+key = "key_f"
+modifiers = "none"
+
+[bindings.fullscreen]
+key = "f11"
+modifiers = "none"
+
+[bindings.toggle_theme]
+key = "key_t"
+modifiers = "ctrl"
+
+[bindings.toggle_sidebar]
+key = "key_h"
+modifiers = "none"
+
+[bindings.edit_shortcuts]
+key = "key_k"
+modifiers = "ctrl"
