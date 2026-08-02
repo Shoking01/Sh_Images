@@ -332,7 +332,7 @@ mod tests {
     fn snapshot_default_keybinding_strings() {
         let strings: Vec<String> = ShortcutMap::defaults()
             .iter()
-            .map(|(a, b)| format!("{} -> {}", a.label(), b.to_string()))
+            .map(|(a, b)| format!("{} -> {}", a.label(), b))
             .collect();
         insta::assert_snapshot!(strings.join("\n"));
     }

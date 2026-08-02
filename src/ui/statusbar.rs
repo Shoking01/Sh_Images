@@ -66,7 +66,14 @@ pub fn show(ui: &mut egui::Ui, info: &StatusInfo) {
 mod tests {
     use super::*;
 
-    fn info(name: &str, w: u32, h: u32, bytes: Option<u64>, idx: usize, total: usize) -> StatusInfo {
+    fn info(
+        name: &str,
+        w: u32,
+        h: u32,
+        bytes: Option<u64>,
+        idx: usize,
+        total: usize,
+    ) -> StatusInfo {
         StatusInfo {
             name: name.to_string(),
             width: w,
@@ -105,7 +112,14 @@ mod tests {
             info("img_0042.png", 3840, 2160, Some(4_404_019), 3, 50),
             info("tiny.jpg", 64, 64, Some(512), 1, 1),
             info("no-size.tiff", 100, 200, None, 2, 7),
-            info("big_file_with_a_long_name.jpeg", 8, 8, Some(5_368_709_120), 9, 9),
+            info(
+                "big_file_with_a_long_name.jpeg",
+                8,
+                8,
+                Some(5_368_709_120),
+                9,
+                9,
+            ),
         ];
         let lines: Vec<String> = cases.iter().map(format_status).collect();
         insta::assert_snapshot!(lines.join("\n"));

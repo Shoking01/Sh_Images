@@ -23,60 +23,53 @@ pub fn show(
     is_fullscreen: bool,
 ) -> Option<Action> {
     let mut clicked = None;
-    egui::Panel::top("toolbar")
-        .exact_size(30.0)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if toolbar_button(ui, "←", Action::Prev, shortcuts) {
-                    clicked = Some(Action::Prev);
-                }
-                if toolbar_button(ui, "→", Action::Next, shortcuts) {
-                    clicked = Some(Action::Next);
-                }
+    egui::Panel::top("toolbar").exact_size(30.0).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            if toolbar_button(ui, "←", Action::Prev, shortcuts) {
+                clicked = Some(Action::Prev);
+            }
+            if toolbar_button(ui, "→", Action::Next, shortcuts) {
+                clicked = Some(Action::Next);
+            }
 
-                ui.separator();
+            ui.separator();
 
-                if toolbar_button(ui, "↻", Action::RotateCw, shortcuts) {
-                    clicked = Some(Action::RotateCw);
-                }
-                if toolbar_button(ui, "⤢", Action::Fit, shortcuts) {
-                    clicked = Some(Action::Fit);
-                }
+            if toolbar_button(ui, "↻", Action::RotateCw, shortcuts) {
+                clicked = Some(Action::RotateCw);
+            }
+            if toolbar_button(ui, "⤢", Action::Fit, shortcuts) {
+                clicked = Some(Action::Fit);
+            }
 
-                ui.separator();
+            ui.separator();
 
-                if toolbar_button(ui, "⛶", Action::Fullscreen, shortcuts) {
-                    clicked = Some(Action::Fullscreen);
-                }
-                if toolbar_button(ui, "◐", Action::ToggleTheme, shortcuts) {
-                    clicked = Some(Action::ToggleTheme);
-                }
-                if toolbar_button(ui, "☰", Action::ToggleSidebar, shortcuts) {
-                    clicked = Some(Action::ToggleSidebar);
-                }
-                if toolbar_button(ui, "⚙", Action::EditShortcuts, shortcuts) {
-                    clicked = Some(Action::EditShortcuts);
-                }
+            if toolbar_button(ui, "⛶", Action::Fullscreen, shortcuts) {
+                clicked = Some(Action::Fullscreen);
+            }
+            if toolbar_button(ui, "◐", Action::ToggleTheme, shortcuts) {
+                clicked = Some(Action::ToggleTheme);
+            }
+            if toolbar_button(ui, "☰", Action::ToggleSidebar, shortcuts) {
+                clicked = Some(Action::ToggleSidebar);
+            }
+            if toolbar_button(ui, "⚙", Action::EditShortcuts, shortcuts) {
+                clicked = Some(Action::EditShortcuts);
+            }
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!("Tema: {theme_name}"));
-                    if is_fullscreen {
-                        ui.colored_label(egui::Color32::YELLOW, "● Fullscreen");
-                    }
-                });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(format!("Tema: {theme_name}"));
+                if is_fullscreen {
+                    ui.colored_label(egui::Color32::YELLOW, "● Fullscreen");
+                }
             });
         });
+    });
     clicked
 }
 
 /// Pinta un botón con `icon`, tooltip con `action.label()` + atajo, y devuelve
 /// `true` si se clickeó.
-fn toolbar_button(
-    ui: &mut egui::Ui,
-    icon: &str,
-    action: Action,
-    shortcuts: &ShortcutMap,
-) -> bool {
+fn toolbar_button(ui: &mut egui::Ui, icon: &str, action: Action, shortcuts: &ShortcutMap) -> bool {
     let shortcut = shortcuts
         .get(action)
         .map(|b| b.to_string())

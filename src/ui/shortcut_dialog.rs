@@ -7,9 +7,7 @@
 use eframe::egui;
 
 use crate::core::actions::Action;
-use crate::core::shortcuts::{
-    KeyBinding, KeyCode, Modifiers, ShortcutError, ShortcutMap,
-};
+use crate::core::shortcuts::{KeyBinding, KeyCode, Modifiers, ShortcutError, ShortcutMap};
 
 /// Estado del dialog de atajos.
 #[derive(Debug, Default)]
@@ -49,10 +47,8 @@ impl ShortcutDialog {
                                 self.error = None;
                             }
                             Err(ShortcutError::Conflict(other)) => {
-                                self.error = Some(format!(
-                                    "«{}» ya usa esa combinación",
-                                    other.label()
-                                ));
+                                self.error =
+                                    Some(format!("«{}» ya usa esa combinación", other.label()));
                                 self.capture_for = None;
                             }
                             Err(ShortcutError::InvalidKey(_)) | Err(ShortcutError::Empty) => {
@@ -97,9 +93,12 @@ impl ShortcutDialog {
 fn pressed_binding(ui: &egui::Ui) -> Option<KeyBinding> {
     ui.input(|i| {
         i.events.iter().find_map(|event| match event {
-            egui::Event::Key { key, pressed: true, modifiers, .. } => {
-                keybinding_from_egui(*key, *modifiers)
-            }
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => keybinding_from_egui(*key, *modifiers),
             _ => None,
         })
     })
@@ -109,10 +108,7 @@ fn pressed_binding(ui: &egui::Ui) -> Option<KeyBinding> {
 ///
 /// Solo mapea las teclas que existen en `KeyCode`; el resto devuelve `None`
 /// (se ignoran). Ctrl+Shift se mapea a `Modifiers::CtrlShift`; Alt se ignora.
-pub fn keybinding_from_egui(
-    key: egui::Key,
-    modifiers: egui::Modifiers,
-) -> Option<KeyBinding> {
+pub fn keybinding_from_egui(key: egui::Key, modifiers: egui::Modifiers) -> Option<KeyBinding> {
     let code = match key {
         egui::Key::ArrowLeft => KeyCode::ArrowLeft,
         egui::Key::ArrowRight => KeyCode::ArrowRight,

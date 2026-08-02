@@ -17,7 +17,8 @@ use sh_images::core::shortcuts::ShortcutMap;
 use sh_images::core::view::{Vec2, ViewTransform};
 
 use common::{
-    corrupt_png_path, empty_png_path, gif_path, make_folder_with_images, make_folder_with_rect_images,
+    corrupt_png_path, empty_png_path, gif_path, make_folder_with_images,
+    make_folder_with_rect_images,
 };
 
 /// Flujo 1 — Apertura: abrir → decodificar → cachear.
@@ -221,7 +222,10 @@ fn flujo_rotacion_visual() {
     let eff = t.effective_size();
     assert_eq!((eff.x as u32, eff.y as u32), (h, w), "dims intercambiadas");
     // min(600/40, 300/80) = min(15.0, 3.75) = 3.75 ≠ 7.5
-    assert!((t.fit_zoom() - fit0).abs() > 1e-6, "fit cambia con rotación");
+    assert!(
+        (t.fit_zoom() - fit0).abs() > 1e-6,
+        "fit cambia con rotación"
+    );
     assert_eq!(t.pan, Vec2::ZERO, "rota → pan 0");
 
     // "Rotar 90° CCW" restaura la orientación original.

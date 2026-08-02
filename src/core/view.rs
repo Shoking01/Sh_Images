@@ -96,11 +96,7 @@ impl ViewTransform {
     /// Zoom que hace caber la imagen completa en el viewport.
     pub fn fit_zoom(&self) -> f32 {
         let size = self.effective_size();
-        if size.x <= 0.0
-            || size.y <= 0.0
-            || self.viewport.x <= 0.0
-            || self.viewport.y <= 0.0
-        {
+        if size.x <= 0.0 || size.y <= 0.0 || self.viewport.x <= 0.0 || self.viewport.y <= 0.0 {
             return 1.0;
         }
         let zx = self.viewport.x / size.x;
@@ -337,7 +333,10 @@ mod tests {
             let o = t.image_origin_screen();
             lines.push(format!(
                 "rot={} fit={:.4} origin=({:.4},{:.4})",
-                t.rotation, t.fit_zoom(), o.x, o.y
+                t.rotation,
+                t.fit_zoom(),
+                o.x,
+                o.y
             ));
             t.rotate_cw();
         }

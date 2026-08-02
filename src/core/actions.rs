@@ -128,7 +128,9 @@ mod tests {
         struct Wrap {
             action: Action,
         }
-        let w = Wrap { action: Action::RotateCw };
+        let w = Wrap {
+            action: Action::RotateCw,
+        };
         let s = toml::to_string(&w).expect("serializar");
         let back: Wrap = toml::from_str(&s).expect("deserializar");
         assert_eq!(back, w);
