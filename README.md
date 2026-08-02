@@ -28,4 +28,23 @@ cargo test
 cargo test --release
 ```
 
+## Desarrollo
+
+```bash
+# Suite de tests completa (unitarios + integración)
+cargo test
+
+# Tests de integración de los flujos críticos (AGENTS.md §8.1)
+cargo test --test integration
+
+# Benchmarks de rendimiento (AGENTS.md §6.2)
+cargo bench
+
+# Benchmarks sin ejecutar (solo compilar)
+cargo bench --no-run
+
+# QA completo pre-commit
+cargo check && cargo clippy --all-targets -- -D warnings && cargo fmt --check && cargo test
+```
+
 Ver `AGENTS.md` para estándares de calidad y `Plan.md` para el roadmap.
