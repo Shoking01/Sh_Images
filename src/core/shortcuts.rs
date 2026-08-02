@@ -157,18 +157,19 @@ impl KeyCode {
     }
 }
 
-impl KeyBinding {
-    /// Representación mostrada en la UI: `"Ctrl+O"`, `"→"`, `"F11"`.
-    pub fn to_string(&self) -> String {
+impl std::fmt::Display for KeyBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mods = match self.modifiers {
             Modifiers::None => "",
             Modifiers::Ctrl => "Ctrl+",
             Modifiers::CtrlShift => "Ctrl+Shift+",
         };
-        format!("{mods}{}", self.key.to_str())
+        write!(f, "{mods}{}", self.key.to_str())
     }
+}
 
-    /// Parsea la representación de `to_string` (`"Ctrl+O"`, `"→"`, `"F11"`).
+impl KeyBinding {
+    /// Parsea la representación de `Display` (`"Ctrl+O"`, `"→"`, `"F11"`).
     ///
     /// # Errors
     /// * `ShortcutError::Empty` si el input está vacío.
@@ -184,9 +185,8 @@ impl KeyBinding {
         } else {
             (Modifiers::None, input)
         };
-        let key = KeyCode::from_str(key_part).ok_or_else(|| {
-            ShortcutError::InvalidKey(key_part.to_string())
-        })?;
+        let key = KeyCode::from_str(key_part)
+            .ok_or_else(|| ShortcutError::InvalidKey(key_part.to_string()))?;
         Ok(KeyBinding::new(key, mods))
     }
 }
@@ -216,14 +216,20 @@ mod tests {
         assert_eq!(map.get(Action::Fullscreen).unwrap().to_string(), "F11");
         assert_eq!(map.get(Action::ToggleTheme).unwrap().to_string(), "Ctrl+T");
         assert_eq!(map.get(Action::ToggleSidebar).unwrap().to_string(), "H");
-        assert_eq!(map.get(Action::EditShortcuts).unwrap().to_string(), "Ctrl+K");
+        assert_eq!(
+            map.get(Action::EditShortcuts).unwrap().to_string(),
+            "Ctrl+K"
+        );
     }
 
     #[test]
     fn assign_replaces_binding_without_conflict() {
         let mut map = ShortcutMap::defaults();
-        map.assign(Action::Next, KeyBinding::new(KeyCode::KeyF, Modifiers::Ctrl))
-            .expect("sin conflicto");
+        map.assign(
+            Action::Next,
+            KeyBinding::new(KeyCode::KeyF, Modifiers::Ctrl),
+        )
+        .expect("sin conflicto");
         assert_eq!(map.get(Action::Next).unwrap().to_string(), "Ctrl+F");
     }
 
@@ -232,7 +238,10 @@ mod tests {
         let mut map = ShortcutMap::defaults();
         let original = map.get(Action::Next).copied().expect("binding");
         let err = map
-            .assign(Action::Next, KeyBinding::new(KeyCode::KeyO, Modifiers::Ctrl))
+            .assign(
+                Action::Next,
+                KeyBinding::new(KeyCode::KeyO, Modifiers::Ctrl),
+            )
             .expect_err("Ctrl+O ya lo usa Open");
         assert!(matches!(err, ShortcutError::Conflict(Action::Open)));
         assert_eq!(map.get(Action::Next).copied(), Some(original), "no se mutó");
@@ -265,8 +274,11 @@ mod tests {
     #[test]
     fn reset_restores_defaults() {
         let mut map = ShortcutMap::defaults();
-        map.assign(Action::Next, KeyBinding::new(KeyCode::KeyF, Modifiers::Ctrl))
-            .expect("asignar");
+        map.assign(
+            Action::Next,
+            KeyBinding::new(KeyCode::KeyF, Modifiers::Ctrl),
+        )
+        .expect("asignar");
         map.reset();
         assert_eq!(map, ShortcutMap::defaults());
     }
@@ -275,7 +287,11 @@ mod tests {
     fn to_string_and_parse_roundtrip() {
         for (_, binding) in ShortcutMap::defaults().iter() {
             let s = binding.to_string();
-            assert_eq!(KeyBinding::parse(&s).expect("parse"), binding, "roundtrip de {s}");
+            assert_eq!(
+                KeyBinding::parse(&s).expect("parse"),
+                binding,
+                "roundtrip de {s}"
+            );
         }
     }
 

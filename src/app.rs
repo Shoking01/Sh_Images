@@ -9,15 +9,20 @@ use eframe::egui;
 use image::{DynamicImage, GenericImageView};
 
 use crate::config::settings::Settings;
+use crate::core::actions::Action;
 use crate::core::image_cache::ImageCache;
 use crate::core::image_loader::load_image;
 use crate::core::navigation::{Navigation, SUPPORTED_EXTENSIONS};
 use crate::core::preload::{preload_targets, PRELOAD_DEPTH};
+use crate::core::shortcuts::ShortcutMap;
 use crate::core::thumb_queue::ThumbQueue;
 use crate::core::thumbnail_cache::ThumbnailCache;
 use crate::core::thumbnail_gen::{generate_thumbnail, THUMB_MAX};
 use crate::core::view::{Vec2, ViewTransform};
-use crate::ui::{sidebar::SidebarState, theme, toast::Toasts, viewer};
+use crate::ui::{
+    shortcut_dialog::ShortcutDialog, sidebar::SidebarState, statusbar, statusbar::StatusInfo,
+    theme, toast::Toasts, toolbar, viewer,
+};
 use crate::utils::errors::Result;
 use crate::utils::paths::settings_path;
 
@@ -69,6 +74,14 @@ pub struct ShImagesApp {
     /// Generación de la carpeta abierta; los workers descartan miniaturas de
     /// generaciones anteriores (para no rellenar el cache tras `clear`).
     thumb_epoch: Arc<AtomicU64>,
+    /// Atajos de teclado configurables (desde settings, editables en UI).
+    shortcuts: ShortcutMap,
+    /// Si la ventana está en pantalla completa.
+    is_fullscreen: bool,
+    /// Dialog de configuración de atajos.
+    shortcut_dialog: ShortcutDialog,
+    /// Tamaño en disco cacheado por path (evita `fs::metadata` por frame).
+    size_for: Option<(PathBuf, u64)>,
 }
 
 impl ShImagesApp {
@@ -121,6 +134,7 @@ impl ShImagesApp {
             });
         }
         Self {
+            shortcuts: settings.shortcuts.clone(),
             settings,
             ctx,
             navigation: None,
@@ -139,6 +153,9 @@ impl ShImagesApp {
             thumb_events_rx: Some(thumb_events_rx),
             sidebar: SidebarState::new(),
             thumb_epoch,
+            is_fullscreen: false,
+            shortcut_dialog: ShortcutDialog::default(),
+            size_for: None,
         }
     }
 
@@ -395,29 +412,111 @@ impl ShImagesApp {
         }
     }
 
-    /// Atajos de teclado: Ctrl+O abre, ←→ navega, F re-ajusta a fit.
+    /// Atajos de teclado configurables vía `ShortcutMap`.
+    ///
+    /// Esc siempre sale del fullscreen (comportamiento de sistema, no remapeable).
+    /// Si el dialog de atajos está abierto o hay foco de texto, no se disparan.
     fn handle_shortcuts(&mut self, ui: &mut egui::Ui) {
-        let open = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::O));
-        if open {
-            self.open_dialog();
+        if self.is_fullscreen
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.dispatch(Action::Fullscreen);
+            return;
         }
-        let next = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight));
-        if next {
-            self.navigate(1);
+        if self.shortcut_dialog.open || ui.ctx().egui_wants_keyboard_input() {
+            return;
         }
-        let prev = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft));
-        if prev {
-            self.navigate(-1);
+        let binding = ui.input(|i| {
+            i.events.iter().find_map(|event| match event {
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => crate::ui::shortcut_dialog::keybinding_from_egui(*key, *modifiers),
+                _ => None,
+            })
+        });
+        if let Some(action) = binding.and_then(|b| self.shortcuts.action_for(b)) {
+            self.dispatch(action);
         }
-        let fit = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F));
-        if fit && self.texture.is_some() {
-            self.transform.fit();
-            self.user_interacted = false;
+    }
+
+    /// Ejecuta una acción: único punto por el que toolbar, menú y atajos
+    /// disparan efectos en la app.
+    fn dispatch(&mut self, action: Action) {
+        match action {
+            Action::Open => self.open_dialog(),
+            Action::Prev => self.navigate(-1),
+            Action::Next => self.navigate(1),
+            Action::RotateCw => self.rotate_image(true),
+            Action::RotateCcw => self.rotate_image(false),
+            Action::Fit => {
+                if self.texture.is_some() {
+                    self.transform.fit();
+                    self.user_interacted = false;
+                }
+            }
+            Action::Fullscreen => self.toggle_fullscreen(),
+            Action::ToggleTheme => self.toggle_theme(),
+            Action::ToggleSidebar => self.toggle_sidebar(),
+            Action::EditShortcuts => self.shortcut_dialog.open = true,
         }
-        let toggle_side = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::H));
-        if toggle_side {
-            self.toggle_sidebar();
+    }
+
+    /// Rota la imagen actual 90° (CW si `cw`, CCW si no) y re-aplica fit.
+    fn rotate_image(&mut self, cw: bool) {
+        if self.texture.is_none() {
+            return;
         }
+        if cw {
+            self.transform.rotate_cw();
+        } else {
+            self.transform.rotate_ccw();
+        }
+        self.user_interacted = false;
+    }
+
+    /// Alterna el fullscreen nativo del viewport.
+    fn toggle_fullscreen(&mut self) {
+        self.is_fullscreen = !self.is_fullscreen;
+        self.ctx
+            .send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+        tracing::info!(fullscreen = self.is_fullscreen, "toggled fullscreen");
+    }
+
+    /// Alterna el tema y lo persiste en disco.
+    fn toggle_theme(&mut self) {
+        self.settings.theme = theme::toggle(&self.settings.theme).to_string();
+        if let Ok(path) = settings_path() {
+            if let Err(e) = self.settings.save(&path) {
+                tracing::warn!(error = %e, "failed to persist theme");
+            }
+        }
+        tracing::info!(theme = %self.settings.theme, "theme toggled");
+    }
+
+    /// Construye la info de la imagen actual para la status bar.
+    fn current_status_info(&mut self) -> Option<StatusInfo> {
+        let nav = self.navigation.as_ref()?;
+        let path = nav.current_path()?;
+        let name = path.file_name()?.to_string_lossy().into_owned();
+        let size_bytes = match &self.size_for {
+            Some((p, n)) if p == path => Some(*n),
+            _ => {
+                let n = std::fs::metadata(path).ok().map(|m| m.len());
+                self.size_for = Some((path.clone(), n.unwrap_or(0)));
+                Some(n.unwrap_or(0))
+            }
+        };
+        Some(StatusInfo {
+            name,
+            width: self.transform.image_size.x as u32,
+            height: self.transform.image_size.y as u32,
+            size_bytes,
+            index: nav.current + 1,
+            total: nav.images.len(),
+        })
     }
 }
 
@@ -437,6 +536,24 @@ impl eframe::App for ShImagesApp {
         self.poll_loader(t);
         self.poll_thumbnails();
 
+        // Toolbar superior (acciones de la app).
+        let action = toolbar::show(
+            ui,
+            &self.shortcuts,
+            &self.settings.theme,
+            self.is_fullscreen,
+        );
+        if let Some(action) = action {
+            self.dispatch(action);
+        }
+
+        // Status bar inferior (info de la imagen actual).
+        if self.texture.is_some() {
+            if let Some(info) = self.current_status_info() {
+                statusbar::show(ui, &info);
+            }
+        }
+
         if self.sidebar.show {
             if let Some(nav) = &self.navigation {
                 let selected = self.sidebar.show(ui, nav, &self.thumb_cache);
@@ -453,6 +570,22 @@ impl eframe::App for ShImagesApp {
                     if ui.button("Abrir…").clicked() {
                         ui.close();
                         want_open = true;
+                    }
+                });
+                ui.menu_button("Ver", |ui| {
+                    if ui.button(Action::ToggleSidebar.label()).clicked() {
+                        ui.close();
+                        self.dispatch(Action::ToggleSidebar);
+                    }
+                    if ui.button(Action::Fullscreen.label()).clicked() {
+                        ui.close();
+                        self.dispatch(Action::Fullscreen);
+                    }
+                });
+                ui.menu_button("Ayuda", |ui| {
+                    if ui.button(Action::EditShortcuts.label()).clicked() {
+                        ui.close();
+                        self.dispatch(Action::EditShortcuts);
                     }
                 });
             });
@@ -485,6 +618,17 @@ impl eframe::App for ShImagesApp {
 
         self.toasts.update(t);
         self.toasts.show(ui);
+
+        if self.shortcut_dialog.open {
+            let changed = self.shortcut_dialog.show(ui, &mut self.shortcuts);
+            if changed {
+                if let Ok(path) = settings_path() {
+                    if let Err(e) = self.settings.save(&path) {
+                        tracing::warn!(error = %e, "failed to persist shortcuts");
+                    }
+                }
+            }
+        }
 
         self.handle_shortcuts(ui);
     }
