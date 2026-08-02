@@ -13,6 +13,7 @@ use sh_images::core::image_cache::ImageCache;
 use sh_images::core::image_loader::load_image;
 use sh_images::core::navigation::{Navigation, SUPPORTED_EXTENSIONS};
 use sh_images::core::preload::{preload_targets, PRELOAD_DEPTH};
+use sh_images::core::shortcuts::ShortcutMap;
 use sh_images::core::view::{Vec2, ViewTransform};
 
 use common::{corrupt_png_path, empty_png_path, gif_path, make_folder_with_images};
@@ -182,6 +183,7 @@ fn flujo_configuracion_persistencia() {
     let modified = Settings {
         cache_memory_limit_mb: 256,
         theme: "light".to_string(),
+        shortcuts: ShortcutMap::defaults(),
     };
     modified.save(&path).expect("guardar modificado");
 
