@@ -1,0 +1,8 @@
+---
+source: src/ui/statusbar.rs
+expression: "lines.join(\"\\n\")"
+---
+img_0042.png · 3840×2160 · 4.2 MB · 3/50
+tiny.jpg · 64×64 · 512 B · 1/1
+no-size.tiff · 100×200 · — · 2/7
+big_file_with_a_long_name.jpeg · 8×8 · 5.0 GB · 9/9
