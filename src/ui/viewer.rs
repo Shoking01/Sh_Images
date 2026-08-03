@@ -14,12 +14,12 @@ pub struct ViewResponse {
     pub zoomed: bool,
 }
 
-/// Pinta la textura en todo el espacio disponible y captura zoom/pan.
+/// Pinta la textura en todo el espacio disponible y captura zoom.
 ///
 /// # Arguments
 /// * `ui` - UI de egui donde se dibuja el canvas.
 /// * `texture` - Textura de la imagen a mostrar.
-/// * `transform` - Transformación de vista (se muta con zoom/pan).
+/// * `transform` - Transformación de vista (se muta con zoom).
 pub fn show(
     ui: &mut egui::Ui,
     texture: &egui::TextureHandle,
