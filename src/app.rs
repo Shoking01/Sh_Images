@@ -80,8 +80,6 @@ pub struct ShImagesApp {
     is_fullscreen: bool,
     /// Dialog de configuración de atajos.
     shortcut_dialog: ShortcutDialog,
-    /// Si la barra de estado con la info de la imagen está visible.
-    show_info: bool,
     /// Tamaño en disco cacheado por path (evita `fs::metadata` por frame).
     size_for: Option<(PathBuf, u64)>,
 }
@@ -157,7 +155,6 @@ impl ShImagesApp {
             thumb_epoch,
             is_fullscreen: false,
             shortcut_dialog: ShortcutDialog::default(),
-            show_info: true,
             size_for: None,
         }
     }
@@ -386,11 +383,6 @@ impl ShImagesApp {
         self.sidebar.show = !self.sidebar.show;
     }
 
-    /// Alterna la visibilidad de la barra de estado con la info de la imagen.
-    fn toggle_info(&mut self) {
-        self.show_info = !self.show_info;
-    }
-
     /// Dispara la pre-carga de N±1 usando `preload_targets`.
     fn preload_neighbors(&self) {
         let Some(nav) = &self.navigation else { return };
@@ -468,7 +460,7 @@ impl ShImagesApp {
             Action::Fullscreen => self.toggle_fullscreen(),
             Action::ToggleTheme => self.toggle_theme(),
             Action::ToggleSidebar => self.toggle_sidebar(),
-            Action::ToggleInfo => self.toggle_info(),
+            Action::ToggleInfo => {},
             Action::EditShortcuts => self.shortcut_dialog.open = true,
         }
     }
@@ -557,7 +549,7 @@ impl eframe::App for ShImagesApp {
         }
 
         // Status bar inferior (info de la imagen actual).
-        if self.show_info && self.texture.is_some() {
+        if self.texture.is_some() {
             if let Some(info) = self.current_status_info() {
                 statusbar::show(ui, &info);
             }
