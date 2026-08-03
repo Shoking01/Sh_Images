@@ -114,6 +114,7 @@ pub fn keybinding_from_egui(key: egui::Key, modifiers: egui::Modifiers) -> Optio
         egui::Key::ArrowRight => KeyCode::ArrowRight,
         egui::Key::F => KeyCode::KeyF,
         egui::Key::H => KeyCode::KeyH,
+        egui::Key::I => KeyCode::KeyI,
         egui::Key::K => KeyCode::KeyK,
         egui::Key::O => KeyCode::KeyO,
         egui::Key::T => KeyCode::KeyT,

@@ -52,6 +52,9 @@ pub fn show(
             if toolbar_button(ui, "Barra", Action::ToggleSidebar, shortcuts) {
                 clicked = Some(Action::ToggleSidebar);
             }
+            if toolbar_button(ui, "Info", Action::ToggleInfo, shortcuts) {
+                clicked = Some(Action::ToggleInfo);
+            }
             if toolbar_button(ui, "Atajos", Action::EditShortcuts, shortcuts) {
                 clicked = Some(Action::EditShortcuts);
             }

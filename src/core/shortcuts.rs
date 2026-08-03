@@ -12,6 +12,7 @@ pub enum KeyCode {
     ArrowRight,
     KeyF,
     KeyH,
+    KeyI,
     KeyK,
     KeyO,
     KeyT,
@@ -130,6 +131,7 @@ impl KeyCode {
             KeyCode::ArrowRight => "→",
             KeyCode::KeyF => "F",
             KeyCode::KeyH => "H",
+            KeyCode::KeyI => "I",
             KeyCode::KeyK => "K",
             KeyCode::KeyO => "O",
             KeyCode::KeyT => "T",
@@ -146,6 +148,7 @@ impl KeyCode {
             "→" => Some(KeyCode::ArrowRight),
             "F" => Some(KeyCode::KeyF),
             "H" => Some(KeyCode::KeyH),
+            "I" => Some(KeyCode::KeyI),
             "K" => Some(KeyCode::KeyK),
             "O" => Some(KeyCode::KeyO),
             "T" => Some(KeyCode::KeyT),
@@ -198,7 +201,7 @@ mod tests {
     #[test]
     fn defaults_has_one_entry_per_action() {
         let map = ShortcutMap::defaults();
-        assert_eq!(map.iter().count(), 10);
+        assert_eq!(map.iter().count(), 11);
         for action in Action::all() {
             assert!(map.get(action).is_some(), "{action:?} sin binding default");
         }
@@ -216,6 +219,7 @@ mod tests {
         assert_eq!(map.get(Action::Fullscreen).unwrap().to_string(), "F11");
         assert_eq!(map.get(Action::ToggleTheme).unwrap().to_string(), "Ctrl+T");
         assert_eq!(map.get(Action::ToggleSidebar).unwrap().to_string(), "H");
+        assert_eq!(map.get(Action::ToggleInfo).unwrap().to_string(), "I");
         assert_eq!(
             map.get(Action::EditShortcuts).unwrap().to_string(),
             "Ctrl+K"

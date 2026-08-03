@@ -38,6 +38,10 @@ modifiers = "ctrl"
 key = "key_h"
 modifiers = "none"
 
+[bindings.toggle_info]
+key = "key_i"
+modifiers = "none"
+
 [bindings.edit_shortcuts]
 key = "key_k"
 modifiers = "ctrl"

@@ -29,6 +29,8 @@ pub enum Action {
     ToggleTheme,
     /// Mostrar u ocultar el sidebar.
     ToggleSidebar,
+    /// Mostrar u ocultar la información de la imagen.
+    ToggleInfo,
     /// Abrir el editor de atajos de teclado.
     EditShortcuts,
 }
@@ -46,6 +48,7 @@ impl Action {
             Action::Fullscreen => "Pantalla completa",
             Action::ToggleTheme => "Cambiar tema",
             Action::ToggleSidebar => "Mostrar/ocultar barra lateral",
+            Action::ToggleInfo => "Mostrar/ocultar información",
             Action::EditShortcuts => "Configurar atajos",
         }
     }
@@ -62,12 +65,13 @@ impl Action {
             Action::Fullscreen => KeyBinding::new(KeyCode::F11, Modifiers::None),
             Action::ToggleTheme => KeyBinding::new(KeyCode::KeyT, Modifiers::Ctrl),
             Action::ToggleSidebar => KeyBinding::new(KeyCode::KeyH, Modifiers::None),
+            Action::ToggleInfo => KeyBinding::new(KeyCode::KeyI, Modifiers::None),
             Action::EditShortcuts => KeyBinding::new(KeyCode::KeyK, Modifiers::Ctrl),
         })
     }
 
     /// Todas las variantes en orden estable (para el editor de atajos).
-    pub fn all() -> [Action; 10] {
+    pub fn all() -> [Action; 11] {
         [
             Action::Open,
             Action::Prev,
@@ -78,6 +82,7 @@ impl Action {
             Action::Fullscreen,
             Action::ToggleTheme,
             Action::ToggleSidebar,
+            Action::ToggleInfo,
             Action::EditShortcuts,
         ]
     }
@@ -110,14 +115,15 @@ mod tests {
         assert_eq!(Action::Next.label(), "Siguiente");
         assert_eq!(Action::RotateCw.label(), "Rotar 90° CW");
         assert_eq!(Action::EditShortcuts.label(), "Configurar atajos");
+        assert_eq!(Action::ToggleInfo.label(), "Mostrar/ocultar información");
     }
 
     #[test]
-    fn all_returns_exactly_ten_actions() {
+    fn all_returns_eleven_actions() {
         let all = Action::all();
-        assert_eq!(all.len(), 10);
+        assert_eq!(all.len(), 11);
         let unique: std::collections::HashSet<_> = all.into_iter().collect();
-        assert_eq!(unique.len(), 10, "sin variantes duplicadas");
+        assert_eq!(unique.len(), 11, "sin variantes duplicadas");
     }
 
     #[test]
