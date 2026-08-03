@@ -118,6 +118,17 @@ impl ViewTransform {
         self.pan = Vec2::ZERO;
     }
 
+    /// Aplica un factor de zoom anclado al centro del canvas, sin desplazamiento.
+    ///
+    /// Como la imagen queda siempre centrada (`image_origin_screen()` deriva la
+    /// esquina de `zoom`), solo hay que escalar `self.zoom` y clamp lo entre
+    /// `fit_zoom()` (mínimo, imagen completa) y `fit_zoom() * MAX_ZOOM`.
+    pub fn apply_center(&mut self, factor: f32) {
+        let fit = self.fit_zoom();
+        let new_zoom = (self.zoom * factor).clamp(fit, fit * MAX_ZOOM);
+        self.zoom = new_zoom;
+    }
+
     /// Cambia el zoom por `factor` manteniendo fijo el punto de la imagen bajo `anchor`.
     pub fn apply_zoom_at(&mut self, anchor: Vec2, factor: f32) {
         let fit = self.fit_zoom();
@@ -194,6 +205,58 @@ mod tests {
     fn fit_zoom_returns_1_on_zero_dimension() {
         let t = ViewTransform::new(Vec2::ZERO, Vec2::new(500.0, 500.0));
         assert_eq!(t.fit_zoom(), 1.0);
+    }
+
+    #[test]
+    fn apply_center_keeps_image_centered() {
+        let mut t = ViewTransform::new(Vec2::new(1000.0, 1000.0), Vec2::new(500.0, 500.0));
+        let center = Vec2::new(250.0, 250.0);
+        for _ in 0..6 {
+            let origin = t.image_origin_screen();
+            let img_center = origin.add(Vec2::new(1000.0 * t.zoom * 0.5, 1000.0 * t.zoom * 0.5));
+            assert!(
+                approx(img_center.x, center.x),
+                "centrada en x en zoom {}",
+                t.zoom
+            );
+            assert!(
+                approx(img_center.y, center.y),
+                "centrada en y en zoom {}",
+                t.zoom
+            );
+            t.apply_center(2.0);
+        }
+    }
+
+    #[test]
+    fn apply_center_clamps_to_max_zoom() {
+        let mut t = ViewTransform::new(Vec2::new(1000.0, 1000.0), Vec2::new(500.0, 500.0));
+        let fit = t.fit_zoom();
+        t.apply_center(1000.0);
+        assert!(approx(t.zoom, fit * MAX_ZOOM));
+    }
+
+    #[test]
+    fn apply_center_clamps_to_min_fit() {
+        let mut t = ViewTransform::new(Vec2::new(1000.0, 1000.0), Vec2::new(500.0, 500.0));
+        let fit = t.fit_zoom();
+        t.apply_center(0.0001);
+        assert!(approx(t.zoom, fit));
+    }
+
+    #[test]
+    fn image_origin_is_always_centered() {
+        let mut t = ViewTransform::new(Vec2::new(2000.0, 1000.0), Vec2::new(500.0, 500.0));
+        let expected =
+            |zoom: f32| Vec2::new((500.0 - 2000.0 * zoom) / 2.0, (500.0 - 1000.0 * zoom) / 2.0);
+        t.apply_center(1.0);
+        for _ in 0..8 {
+            let o = t.image_origin_screen();
+            let e = expected(t.zoom);
+            assert!(approx(o.x, e.x), "TL-x centrada en zoom {}", t.zoom);
+            assert!(approx(o.y, e.y), "TL-y centrada en zoom {}", t.zoom);
+            t.apply_center(1.5);
+        }
     }
 
     #[test]
