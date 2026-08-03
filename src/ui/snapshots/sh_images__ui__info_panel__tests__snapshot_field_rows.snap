@@ -1,0 +1,38 @@
+---
+source: src/ui/info_panel.rs
+expression: field_rows(&sample())
+---
+[
+    (
+        "Fabricante",
+        "Nikon",
+    ),
+    (
+        "Modelo",
+        "D750",
+    ),
+    (
+        "Fecha",
+        "2020:01:02 03:04:05",
+    ),
+    (
+        "ISO",
+        "400",
+    ),
+    (
+        "Apertura",
+        "f/2.8",
+    ),
+    (
+        "Obturador",
+        "1/125 s",
+    ),
+    (
+        "Focal",
+        "50 mm",
+    ),
+    (
+        "Orientación",
+        "Rotada (6)",
+    ),
+]
