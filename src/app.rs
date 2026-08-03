@@ -596,7 +596,7 @@ impl eframe::App for ShImagesApp {
             match &self.texture {
                 Some(texture) => {
                     let resp = viewer::show(ui, texture, &mut self.transform);
-                    if resp.zoomed || resp.panned {
+                    if resp.zoomed {
                         self.user_interacted = true;
                     }
                     // Auto-fit: al cargar (viewport recién conocido) y al
