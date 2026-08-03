@@ -2,7 +2,7 @@
 //!
 //! `core/` no depende de `egui`; este módulo define un vector 2D mínimo propio.
 
-use std::ops::{Add, Div, Mul, Sub};
+use std::ops::{Add, Mul, Sub};
 
 /// Vector/posición 2D mínimo del módulo core.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,13 +41,6 @@ impl Mul<f32> for Vec2 {
     type Output = Vec2;
     fn mul(self, rhs: f32) -> Vec2 {
         Vec2::new(self.x * rhs, self.y * rhs)
-    }
-}
-
-impl Div<f32> for Vec2 {
-    type Output = Vec2;
-    fn div(self, rhs: f32) -> Vec2 {
-        Vec2::new(self.x / rhs, self.y / rhs)
     }
 }
 

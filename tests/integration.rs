@@ -98,7 +98,7 @@ fn flujo_navegacion_circular() {
 
 /// Flujo 3 — Zoom/Fit: zoom in centrado → fit restaura.
 #[test]
-fn flujo_zoom_pan_fit() {
+fn flujo_zoom_fit_centrado() {
     let mut t = ViewTransform::new(Vec2::new(2000.0, 1000.0), Vec2::new(500.0, 500.0));
     let fit = t.fit_zoom();
     let center = Vec2::new(250.0, 250.0);

@@ -57,7 +57,7 @@ pub struct ShImagesApp {
     /// Receptor persistente del canal único.
     rx: Option<mpsc::Receiver<LoadEvent>>,
     toasts: Toasts,
-    /// `true` si el usuario ha hecho zoom/pan con la imagen actual.
+    /// `true` si el usuario ha hecho zoom con la imagen actual.
     user_interacted: bool,
     /// Último tamaño del canvas; se usa para re-fitear al redimensionar.
     last_viewport: Option<Vec2>,
