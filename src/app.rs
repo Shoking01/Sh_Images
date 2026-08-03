@@ -460,7 +460,7 @@ impl ShImagesApp {
             Action::Fullscreen => self.toggle_fullscreen(),
             Action::ToggleTheme => self.toggle_theme(),
             Action::ToggleSidebar => self.toggle_sidebar(),
-            Action::ToggleInfo => {},
+            Action::ToggleInfo => {}
             Action::EditShortcuts => self.shortcut_dialog.open = true,
         }
     }
