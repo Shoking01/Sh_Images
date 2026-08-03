@@ -20,6 +20,9 @@ pub enum ShImagesError {
     /// Formato de imagen no soportado.
     #[error("unsupported format: {0}")]
     UnsupportedFormat(String),
+    /// Error parseando metadatos EXIF.
+    #[error("exif error: {0}")]
+    Exif(String),
 }
 
 /// Alias de resultado del proyecto.
@@ -53,6 +56,13 @@ mod tests {
         assert!(ShImagesError::Io(io::Error::other("boom"))
             .to_string()
             .contains("io error"));
+    }
+
+    #[test]
+    fn exif_error_displays_message() {
+        let err = ShImagesError::Exif("bad block".to_string());
+        assert_eq!(err.to_string(), "exif error: bad block");
+        assert!(matches!(err, ShImagesError::Exif(_)));
     }
 
     #[test]
