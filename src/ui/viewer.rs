@@ -12,8 +12,6 @@ use crate::core::view::{Vec2, ViewTransform};
 pub struct ViewResponse {
     /// El usuario hizo zoom con la rueda.
     pub zoomed: bool,
-    /// El usuario arrastró (pan).
-    pub panned: bool,
 }
 
 /// Pinta la textura en todo el espacio disponible y captura zoom/pan.
@@ -28,7 +26,7 @@ pub fn show(
     transform: &mut ViewTransform,
 ) -> ViewResponse {
     let size = ui.available_size();
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
 
     transform.set_viewport(Vec2::new(rect.width(), rect.height()));
 
@@ -77,25 +75,15 @@ pub fn show(
 
     let mut result = ViewResponse::default();
 
-    // Zoom con la rueda, anclado al cursor.
+    // Zoom con la rueda, anclado al centro del canvas.
     if response.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
-            let anchor_screen = response.hover_pos().unwrap_or_else(|| rect.center());
-            let anchor = Vec2::new(anchor_screen.x - rect.min.x, anchor_screen.y - rect.min.y);
             let factor = (scroll * 0.001).exp();
-            transform.apply_zoom_at(anchor, factor);
+            transform.apply_center(factor);
             result.zoomed = true;
             ui.ctx().request_repaint();
         }
-    }
-
-    // Pan con arrastre.
-    if response.dragged() {
-        let delta = response.drag_delta();
-        transform.pan_by(Vec2::new(delta.x, delta.y));
-        result.panned = true;
-        ui.ctx().request_repaint();
     }
 
     result
