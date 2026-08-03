@@ -1,4 +1,4 @@
-//! Matemática pura de zoom/pan/fit para el visor.
+//! Matemática pura de zoom/fit para el visor (la imagen queda siempre centrada).
 //!
 //! `core/` no depende de `egui`; este módulo define un vector 2D mínimo propio.
 
@@ -54,13 +54,11 @@ impl Div<f32> for Vec2 {
 /// Zoom máximo como múltiplo del tamaño fit (8x el fit).
 pub const MAX_ZOOM: f32 = 8.0;
 
-/// Transformación de vista: escala y desplazamiento de la imagen en el canvas.
+/// Transformación de vista: escala de la imagen, siempre centrada en el canvas.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewTransform {
     /// Factor de escala actual de la imagen (nunca por debajo de `fit_zoom`).
     pub zoom: f32,
-    /// Desplazamiento de la imagen respecto al centro del canvas.
-    pub pan: Vec2,
     /// Tamaño en píxeles de la imagen original.
     pub image_size: Vec2,
     /// Tamaño del canvas (área visible) en píxeles de pantalla.
@@ -74,7 +72,6 @@ impl ViewTransform {
     pub fn new(image_size: Vec2, viewport: Vec2) -> Self {
         let mut t = Self {
             zoom: 1.0,
-            pan: Vec2::ZERO,
             image_size,
             viewport,
             rotation: 0,
@@ -109,13 +106,12 @@ impl ViewTransform {
         let center = self.viewport.mul(0.5);
         let size = self.effective_size();
         let half = size.mul(self.zoom * 0.5);
-        center.sub(half).add(self.pan)
+        center.sub(half)
     }
 
-    /// Ajusta a fit completo: zoom = fit, pan = centrado.
+    /// Ajusta a fit completo: zoom = fit, imagen centrada.
     pub fn fit(&mut self) {
         self.zoom = self.fit_zoom();
-        self.pan = Vec2::ZERO;
     }
 
     /// Aplica un factor de zoom anclado al centro del canvas, sin desplazamiento.
@@ -129,42 +125,18 @@ impl ViewTransform {
         self.zoom = new_zoom;
     }
 
-    /// Cambia el zoom por `factor` manteniendo fijo el punto de la imagen bajo `anchor`.
-    pub fn apply_zoom_at(&mut self, anchor: Vec2, factor: f32) {
-        let fit = self.fit_zoom();
-        let min = fit;
-        let max = fit * MAX_ZOOM;
-        let new_zoom = (self.zoom * factor).clamp(min, max);
-        if (new_zoom - self.zoom).abs() < f32::EPSILON {
-            return;
-        }
-        let origin = self.image_origin_screen();
-        let image_point = anchor.sub(origin).div(self.zoom);
-        let new_origin = anchor.sub(image_point.mul(new_zoom));
-        let center = self.viewport.mul(0.5);
-        self.pan = new_origin
-            .sub(center)
-            .add(self.image_size.mul(new_zoom * 0.5));
-        self.zoom = new_zoom;
-    }
-
-    /// Desplaza el pan libremente (sin clamp).
-    pub fn pan_by(&mut self, delta: Vec2) {
-        self.pan = self.pan.add(delta);
-    }
-
     /// Actualiza el tamaño del canvas.
     pub fn set_viewport(&mut self, viewport: Vec2) {
         self.viewport = viewport;
     }
 
-    /// Rota 90° en sentido horario y re-aplica fit (pan a 0).
+    /// Rota 90° en sentido horario y re-aplica fit.
     pub fn rotate_cw(&mut self) {
         self.rotation = (self.rotation + 1) % 4;
         self.fit();
     }
 
-    /// Rota 90° en sentido antihorario y re-aplica fit (pan a 0).
+    /// Rota 90° en sentido antihorario y re-aplica fit.
     pub fn rotate_ccw(&mut self) {
         self.rotation = (self.rotation + 3) % 4;
         self.fit();
@@ -260,45 +232,6 @@ mod tests {
     }
 
     #[test]
-    fn apply_zoom_at_keeps_anchor_point_fixed() {
-        let mut t = ViewTransform::new(Vec2::new(1000.0, 1000.0), Vec2::new(500.0, 500.0));
-        let anchor = Vec2::new(150.0, 200.0);
-        let origin = t.image_origin_screen();
-        let image_point = anchor.sub(origin).div(t.zoom);
-        t.apply_zoom_at(anchor, 1.5);
-        let new_origin = t.image_origin_screen();
-        let new_screen = new_origin.add(image_point.mul(t.zoom));
-        assert!(approx(new_screen.x, anchor.x));
-        assert!(approx(new_screen.y, anchor.y));
-    }
-
-    #[test]
-    fn apply_zoom_at_clamps_to_max_zoom() {
-        let mut t = ViewTransform::new(Vec2::new(1000.0, 1000.0), Vec2::new(500.0, 500.0));
-        let fit = t.fit_zoom();
-        t.apply_zoom_at(Vec2::new(250.0, 250.0), 1000.0);
-        assert!(approx(t.zoom, fit * MAX_ZOOM));
-    }
-
-    #[test]
-    fn apply_zoom_at_clamps_to_min_fit() {
-        let mut t = ViewTransform::new(Vec2::new(1000.0, 1000.0), Vec2::new(500.0, 500.0));
-        let fit = t.fit_zoom();
-        t.apply_zoom_at(Vec2::new(250.0, 250.0), 0.0001);
-        assert!(approx(t.zoom, fit));
-    }
-
-    #[test]
-    fn pan_by_moves_image_by_delta() {
-        let mut t = ViewTransform::new(Vec2::new(1000.0, 1000.0), Vec2::new(500.0, 500.0));
-        let before = t.image_origin_screen();
-        t.pan_by(Vec2::new(10.0, -20.0));
-        let after = t.image_origin_screen();
-        assert!(approx(after.x - before.x, 10.0));
-        assert!(approx(after.y - before.y, -20.0));
-    }
-
-    #[test]
     fn set_viewport_updates_canvas_size() {
         let mut t = ViewTransform::new(Vec2::new(1000.0, 1000.0), Vec2::new(500.0, 500.0));
         let fit_before = t.fit_zoom();
@@ -310,12 +243,10 @@ mod tests {
     #[test]
     fn fit_resets_to_centered_initial() {
         let mut t = ViewTransform::new(Vec2::new(1000.0, 1000.0), Vec2::new(500.0, 500.0));
-        t.apply_zoom_at(Vec2::new(100.0, 100.0), 2.0);
-        t.pan_by(Vec2::new(50.0, 50.0));
+        t.apply_center(3.0);
         t.fit();
         let expected = t.fit_zoom();
-        assert!(approx(t.zoom, expected));
-        // En fit con pan 0, la imagen queda centrada.
+        assert!(approx(t.zoom, expected), "fit restaura zoom");
         let expected_origin = Vec2::new(
             (500.0 - 1000.0 * expected) / 2.0,
             (500.0 - 1000.0 * expected) / 2.0,
@@ -368,11 +299,18 @@ mod tests {
     #[test]
     fn rotating_resets_to_fit_and_centers() {
         let mut t = ViewTransform::new(Vec2::new(1000.0, 1000.0), Vec2::new(500.0, 500.0));
-        t.apply_zoom_at(Vec2::new(250.0, 250.0), 3.0);
-        t.pan_by(Vec2::new(40.0, -20.0));
+        t.apply_center(3.0);
         t.rotate_cw();
         assert!(approx(t.zoom, t.fit_zoom()), "rota → fit");
-        assert_eq!(t.pan, Vec2::ZERO, "rota → pan 0");
+        let origin = t.image_origin_screen();
+        assert!(
+            approx(origin.x, (500.0 - 1000.0 * t.zoom) / 2.0),
+            "quedó centrada en x"
+        );
+        assert!(
+            approx(origin.y, (500.0 - 1000.0 * t.zoom) / 2.0),
+            "quedó centrada en y"
+        );
     }
 
     #[test]
