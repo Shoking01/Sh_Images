@@ -5,7 +5,7 @@
 
 mod common;
 
-use std::ops::{Add, Div, Mul, Sub};
+use std::ops::Add;
 
 use image::GenericImageView;
 use sh_images::config::settings::Settings;
@@ -96,33 +96,32 @@ fn flujo_navegacion_circular() {
     assert_eq!(next.expect("siguiente"), &paths[3]);
 }
 
-/// Flujo 3 — Zoom/Pan: zoom in → pan → fit restaura.
+/// Flujo 3 — Zoom/Fit: zoom in centrado → fit restaura.
 #[test]
 fn flujo_zoom_pan_fit() {
     let mut t = ViewTransform::new(Vec2::new(2000.0, 1000.0), Vec2::new(500.0, 500.0));
     let fit = t.fit_zoom();
-    let anchor = Vec2::new(250.0, 250.0);
+    let center = Vec2::new(250.0, 250.0);
 
-    // Capturar el punto de imagen bajo el ancla ANTES del zoom.
+    // El centro de la imagen está bajo el centro del canvas (ancla fija).
     let origin = t.image_origin_screen();
-    let image_point = anchor.sub(origin).div(t.zoom);
+    let img_center = origin.add(Vec2::new(2000.0 * t.zoom * 0.5, 1000.0 * t.zoom * 0.5));
+    assert!((img_center.x - center.x).abs() < 1e-3, "centrada en x");
+    assert!((img_center.y - center.y).abs() < 1e-3, "centrada en y");
 
-    // Zoom in en un punto ancla.
-    t.apply_zoom_at(anchor, 2.0);
+    // Zoom in con rueda: sigue centrada.
+    t.apply_center(2.0);
     assert!(t.zoom > fit, "zoom in supera el fit");
-
-    // El punto de imagen capturado antes debe mapear al mismo ancla de pantalla.
-    let new_origin = t.image_origin_screen();
-    let new_screen = new_origin.add(image_point.mul(t.zoom));
-    assert!((new_screen.x - anchor.x).abs() < 1e-3, "ancla fija en x");
-    assert!((new_screen.y - anchor.y).abs() < 1e-3, "ancla fija en y");
-
-    // Pan desplaza.
-    let before = t.image_origin_screen();
-    t.pan_by(Vec2::new(30.0, -10.0));
-    let after = t.image_origin_screen();
-    assert!((after.x - before.x - 30.0).abs() < 1e-3, "pan mueve en x");
-    assert!((after.y - before.y + 10.0).abs() < 1e-3, "pan mueve en y");
+    let origin2 = t.image_origin_screen();
+    let img_center2 = origin2.add(Vec2::new(2000.0 * t.zoom * 0.5, 1000.0 * t.zoom * 0.5));
+    assert!(
+        (img_center2.x - center.x).abs() < 1e-3,
+        "sigue centrada en x"
+    );
+    assert!(
+        (img_center2.y - center.y).abs() < 1e-3,
+        "sigue centrada en y"
+    );
 
     // Fit restaura zoom y centra.
     t.fit();
@@ -226,8 +225,6 @@ fn flujo_rotacion_visual() {
         (t.fit_zoom() - fit0).abs() > 1e-6,
         "fit cambia con rotación"
     );
-    assert_eq!(t.pan, Vec2::ZERO, "rota → pan 0");
-
     // "Rotar 90° CCW" restaura la orientación original.
     t.rotate_ccw();
     assert_eq!(t.rotation, 0);
