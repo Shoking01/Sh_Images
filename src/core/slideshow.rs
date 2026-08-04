@@ -52,6 +52,12 @@ mod tests {
     }
 
     #[test]
+    fn faster_subsecond_interval_clamps_up_to_minimum() {
+        assert_eq!(faster(Duration::from_millis(500)), Duration::from_secs(1));
+        assert_eq!(faster(Duration::ZERO), Duration::from_secs(1));
+    }
+
+    #[test]
     fn slower_doubles_interval() {
         assert_eq!(slower(Duration::from_secs(5)), Duration::from_secs(10));
     }
