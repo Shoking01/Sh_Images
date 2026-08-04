@@ -31,6 +31,12 @@ pub enum Action {
     ToggleSidebar,
     /// Mostrar u ocultar la información de la imagen.
     ToggleInfo,
+    /// Iniciar o detener el slideshow automático.
+    ToggleSlideshow,
+    /// Acelerar el slideshow.
+    SlideshowFaster,
+    /// Ralentizar el slideshow.
+    SlideshowSlower,
     /// Abrir el editor de atajos de teclado.
     EditShortcuts,
 }
@@ -49,6 +55,9 @@ impl Action {
             Action::ToggleTheme => "Cambiar tema",
             Action::ToggleSidebar => "Mostrar/ocultar barra lateral",
             Action::ToggleInfo => "Mostrar/ocultar información",
+            Action::ToggleSlideshow => "Iniciar/detener slideshow",
+            Action::SlideshowFaster => "Slideshow más rápido",
+            Action::SlideshowSlower => "Slideshow más lento",
             Action::EditShortcuts => "Configurar atajos",
         }
     }
@@ -66,12 +75,15 @@ impl Action {
             Action::ToggleTheme => KeyBinding::new(KeyCode::KeyT, Modifiers::Ctrl),
             Action::ToggleSidebar => KeyBinding::new(KeyCode::KeyH, Modifiers::None),
             Action::ToggleInfo => KeyBinding::new(KeyCode::KeyI, Modifiers::None),
+            Action::ToggleSlideshow => KeyBinding::new(KeyCode::KeyF5, Modifiers::None),
+            Action::SlideshowFaster => KeyBinding::new(KeyCode::Comma, Modifiers::None),
+            Action::SlideshowSlower => KeyBinding::new(KeyCode::Period, Modifiers::None),
             Action::EditShortcuts => KeyBinding::new(KeyCode::KeyK, Modifiers::Ctrl),
         })
     }
 
     /// Todas las variantes en orden estable (para el editor de atajos).
-    pub fn all() -> [Action; 11] {
+    pub fn all() -> [Action; 14] {
         [
             Action::Open,
             Action::Prev,
@@ -83,6 +95,9 @@ impl Action {
             Action::ToggleTheme,
             Action::ToggleSidebar,
             Action::ToggleInfo,
+            Action::ToggleSlideshow,
+            Action::SlideshowFaster,
+            Action::SlideshowSlower,
             Action::EditShortcuts,
         ]
     }
@@ -116,14 +131,17 @@ mod tests {
         assert_eq!(Action::RotateCw.label(), "Rotar 90° CW");
         assert_eq!(Action::EditShortcuts.label(), "Configurar atajos");
         assert_eq!(Action::ToggleInfo.label(), "Mostrar/ocultar información");
+        assert_eq!(Action::ToggleSlideshow.label(), "Iniciar/detener slideshow");
+        assert_eq!(Action::SlideshowFaster.label(), "Slideshow más rápido");
+        assert_eq!(Action::SlideshowSlower.label(), "Slideshow más lento");
     }
 
     #[test]
-    fn all_returns_eleven_actions() {
+    fn all_returns_fourteen_actions() {
         let all = Action::all();
-        assert_eq!(all.len(), 11);
+        assert_eq!(all.len(), 14);
         let unique: std::collections::HashSet<_> = all.into_iter().collect();
-        assert_eq!(unique.len(), 11, "sin variantes duplicadas");
+        assert_eq!(unique.len(), 14, "sin variantes duplicadas");
     }
 
     #[test]

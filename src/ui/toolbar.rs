@@ -16,11 +16,13 @@ use crate::core::shortcuts::ShortcutMap;
 /// * `shortcuts` - Mapa de atajos (para mostrar el atajo en el tooltip).
 /// * `theme_name` - Tema activo (`"dark"` | `"light"`); solo para tooltip.
 /// * `is_fullscreen` - Si la app está en fullscreen (resalta el botón).
+/// * `slideshow_active` - Si el slideshow está activo (muestra el indicador).
 pub fn show(
     ui: &mut egui::Ui,
     shortcuts: &ShortcutMap,
     theme_name: &str,
     is_fullscreen: bool,
+    slideshow_active: bool,
 ) -> Option<Action> {
     let mut clicked = None;
     egui::Panel::top("toolbar").exact_size(30.0).show(ui, |ui| {
@@ -55,6 +57,9 @@ pub fn show(
             if toolbar_button(ui, "Info", Action::ToggleInfo, shortcuts) {
                 clicked = Some(Action::ToggleInfo);
             }
+            if toolbar_button(ui, "▶", Action::ToggleSlideshow, shortcuts) {
+                clicked = Some(Action::ToggleSlideshow);
+            }
             if toolbar_button(ui, "Atajos", Action::EditShortcuts, shortcuts) {
                 clicked = Some(Action::EditShortcuts);
             }
@@ -63,6 +68,9 @@ pub fn show(
                 ui.label(format!("Tema: {theme_name}"));
                 if is_fullscreen {
                     ui.colored_label(egui::Color32::YELLOW, "[*] Fullscreen");
+                }
+                if slideshow_active {
+                    ui.colored_label(egui::Color32::GREEN, "[▶] Slideshow");
                 }
             });
         });

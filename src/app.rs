@@ -591,6 +591,9 @@ impl ShImagesApp {
             Action::ToggleTheme => self.toggle_theme(),
             Action::ToggleSidebar => self.toggle_sidebar(),
             Action::ToggleInfo => self.info_panel.show = !self.info_panel.show,
+            Action::ToggleSlideshow => {}
+            Action::SlideshowFaster => {}
+            Action::SlideshowSlower => {}
             Action::EditShortcuts => self.shortcut_dialog.open = true,
         }
     }
@@ -675,6 +678,7 @@ impl eframe::App for ShImagesApp {
             &self.shortcuts,
             &self.settings.theme,
             self.is_fullscreen,
+            false,
         );
         if let Some(action) = action {
             self.dispatch(action);
