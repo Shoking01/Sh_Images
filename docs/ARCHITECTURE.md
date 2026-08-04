@@ -168,6 +168,8 @@
 - **Alternativas:** `exif` (menos mantenido), parser manual del APP1/TIFF
    (frágil), lectura síncrona en el UI thread (viola §7.1).
 
+## ADR-011: Imagen unificada `LoadedImage` y GIF animado
+
 ## ADR-010: Imagen unificada `LoadedImage` y GIF animado
 
 - **Contexto:** `ImageCache` guardaba una `DynamicImage` por path; un GIF
@@ -201,3 +203,30 @@
   `request_repaint_after`.
 - **Alternativas:** intervalo fijo sin configuración (menos flexible), sin
   acciones de velocidad (depender solo de settings).
+
+## ADR-012: Windows MSI packaging con WiX
+
+- **Contexto:** Fase 5 necesita distribuir Sh_Images como instalador nativo en
+  Windows (`.exe` distribuido vía `cargo build --release` no es suficiente: no
+  registra asociaciones de archivos, no aparece en "Agregar o quitar
+  programas", y el `.exe` con consola no es apropiado para un visor).
+- **Decisión:** WiX 3.14 (`candle.exe` + `light.exe`) genera el MSI
+  (`perMachine`, `x64`). El `.ico` multi-resolución se genera en `build.rs`
+  desde `assets/icon.svg` (via `resvg`/`usvg`/`tiny-skia`) y se incrusta en el
+  `.exe` con `winres`. `main.rs` acepta `sh_images.exe <path>` para abrir
+  imágenes desde asociaciones. El workflow `release.yml` builda solo en tags
+  `v*`, instala WiX via `choco`, valida MSI < 30 MB y sube como artifact.
+- **Consecuencias:**
+  - `UpgradeCode` GUID (37f3b815-2bae-4e7b-880a-ec41fbc1b012) es **inmutable**:
+    cambiarlo crea una entrada duplicada en "Agregar o quitar programas". Ver
+    AGENTS.md §7.4.
+  - Version del MSI sincronizada con `Cargo.toml` via `-dVersion` en build.cmd.
+  - `windows_subsystem = "windows"` en `main.rs` elimina la consola del exe.
+  - `[profile.release]` (lto + strip + codegen-units=1) mantiene el binario
+    ~15.9 MB (< 20 MB AGENTS.md §6.1).
+  - macOS/Linux quedan como stubs documentados en `docs/DISTRIBUTION.md`
+    (Fase 5b).
+- **Alternativas:** (a) cargo-dist (más features, menos control sobre WiX),
+  (b) NSIS (más simple, menos estándar en ecosistema empresarial), (c) MSIX
+  (necesita firma digital para fuera de Microsoft Store), (d) ZIP portable
+  (sin uninstall integration, pero cero dependencies).

@@ -149,7 +149,7 @@ fn main() -> eframe::Result<()> {
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="Sh_Images" Language="1033" Version="0.1.0" Manufacturer="Adrián Quirós" UpgradeCode="A1B2C3D4-E5F6-4A5B-9C8D-7E8F9A0B1C2D">
+   <Product Id="*" Name="Sh_Images" Language="1033" Version="0.1.0" Manufacturer="Adrián Quirós" UpgradeCode="37f3b815-2bae-4e7b-880a-ec41fbc1b012">
     <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
     <MajorIcon Id="app.ico" SourceFile="!(wix.App.ico)" />
     <MediaTemplate />
@@ -282,7 +282,8 @@ Downloads the MSI installer from [GitHub Releases](https://github.com/.../releas
 
 **`AGENTS.md` (actualizar):**
 `§7.4 Packaging`:
-- `UpgradeCode` GUID es inmutable → si se necesita cambiar, se documenta en issue.
+- `UpgradeCode` GUID (37f3b815-2bae-4e7b-880a-ec41fbc1b012) es inmutable →
+  si se necesita cambiar, abrir un issue.
 - Version del MSI sincronizado con `Cargo.toml`.
 - Icono generado en build time → `cargo clean` puede requerir re-generación.
 

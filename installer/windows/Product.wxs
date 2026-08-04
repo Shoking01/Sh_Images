@@ -12,7 +12,7 @@
     Language="1033"
     Version="$(var.Version)"
     Manufacturer="Adrián Quirós"
-    UpgradeCode="A1B2C3D4-E5F6-4A5B-9C8D-7E8F9A0B1C2D">
+    UpgradeCode="37f3b815-2bae-4e7b-880a-ec41fbc1b012">
     <Package
       InstallerVersion="200"
       Compressed="yes"
