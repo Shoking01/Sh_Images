@@ -150,3 +150,20 @@
   pre-rotadas en GPU (desperdicia memoria, N=4 copias), (c) implementar la
   rotación solo en math de viewer (`Painter::with_clip_rect` + `rotate` shadres)
   más complejo y propenso a errores de muestreo en los bordes.
+
+## ADR-009: Metadatos EXIF con `kamadak-exif` y panel de información
+
+- **Contexto:** Fase 4 necesita leer EXIF (JPEG/TIFF) y mostrarlo; `core/exif.rs`
+  era un stub. La lectura es I/O y no debe bloquear el UI thread (AGENTS.md §7.1).
+- **Decisión:** `kamadak-exif` 0.6.1 (BSD-2-Clause, estándar, Plan.md §6) en
+  `core/exif.rs` con un modelo curado `ExifImage` (Make, Model, fecha, ISO,
+  f-number, ExposureTime, FocalLength, Orientation) y `Rational`. Un worker de
+  `app.rs` lee el EXIF en segundo plano y lo cachea por path (`ExifRead`
+  distingue Found/None/Error). Un nuevo `ui::info_panel` pinta un `Panel::right`
+  con las filas formateadas; `Action::ToggleInfo` (shortcut `I`) lo alterna.
+- **Consecuencias:** La UI no bloquea al leer EXIF grande; el cache por path
+  evita re-parseos; imágenes sin EXIF muestran "Sin metadatos"; errores → toast.
+  Un JPEG/TIFF sin bloque APP1 hace que la librería devuelva `Error::NotFound`,
+  que se mapea a `Ok(None)` (no es un error).
+- **Alternativas:** `exif` (menos mantenido), parser manual del APP1/TIFF
+  (frágil), lectura síncrona en el UI thread (viola §7.1).
