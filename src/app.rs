@@ -1,9 +1,11 @@
 //! Estado global de la aplicación y loop principal de `egui`.
 
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
+
+use crate::core::exif::{read_exif, ExifRead};
 
 use eframe::egui;
 use image::{DynamicImage, GenericImageView};
@@ -20,8 +22,14 @@ use crate::core::thumbnail_cache::ThumbnailCache;
 use crate::core::thumbnail_gen::{generate_thumbnail, THUMB_MAX};
 use crate::core::view::{Vec2, ViewTransform};
 use crate::ui::{
-    shortcut_dialog::ShortcutDialog, sidebar::SidebarState, statusbar, statusbar::StatusInfo,
-    theme, toast::Toasts, toolbar, viewer,
+    info_panel::{self, InfoPanelState},
+    shortcut_dialog::ShortcutDialog,
+    sidebar::SidebarState,
+    statusbar,
+    statusbar::StatusInfo,
+    theme,
+    toast::Toasts,
+    toolbar, viewer,
 };
 use crate::utils::errors::Result;
 use crate::utils::paths::settings_path;
@@ -82,6 +90,14 @@ pub struct ShImagesApp {
     shortcut_dialog: ShortcutDialog,
     /// Tamaño en disco cacheado por path (evita `fs::metadata` por frame).
     size_for: Option<(PathBuf, u64)>,
+    /// Cache de EXIF por path (se limpia al abrir una carpeta).
+    exif_cache: Arc<Mutex<HashMap<PathBuf, ExifRead>>>,
+    /// Emisor de peticiones de EXIF (UI → worker).
+    exif_tx: mpsc::Sender<PathBuf>,
+    /// Receptor de avisos "EXIF listo" (solo dispara repaint).
+    exif_rx: Option<mpsc::Receiver<()>>,
+    /// Estado del panel derecho de info.
+    info_panel: InfoPanelState,
 }
 
 impl ShImagesApp {
@@ -133,6 +149,30 @@ impl ShImagesApp {
                 }
             });
         }
+        let (exif_tx, exif_rx) = mpsc::channel::<PathBuf>();
+        let (exif_events_tx, exif_events_rx) = mpsc::channel::<()>();
+        let exif_cache = Arc::new(Mutex::new(HashMap::new()));
+        {
+            let cache = exif_cache.clone();
+            let events_tx = exif_events_tx.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                while let Ok(path) = exif_rx.recv() {
+                    let result = match read_exif(&path) {
+                        Ok(Some(img)) => ExifRead::Found(img),
+                        Ok(None) => ExifRead::None,
+                        Err(e) => ExifRead::Error(e),
+                    };
+                    if let Ok(mut m) = cache.lock() {
+                        m.insert(path, result);
+                    }
+                    if events_tx.send(()).is_err() {
+                        tracing::debug!("exif event dropped (receiver gone)");
+                    }
+                    ctx.request_repaint();
+                }
+            });
+        }
         Self {
             shortcuts: settings.shortcuts.clone(),
             settings,
@@ -156,6 +196,10 @@ impl ShImagesApp {
             is_fullscreen: false,
             shortcut_dialog: ShortcutDialog::default(),
             size_for: None,
+            exif_cache,
+            exif_tx,
+            exif_rx: Some(exif_events_rx),
+            info_panel: InfoPanelState::default(),
         }
     }
 
@@ -200,6 +244,10 @@ impl ShImagesApp {
                 // drenado cada worker consumiría (y descartaría) un path obsoleto
                 // antes de llegar a los nuevos.
                 self.thumb_queue.drain();
+                self.exif_cache
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clear();
                 for image_path in &nav.images {
                     self.thumb_queue.push(image_path.clone());
                 }
@@ -262,6 +310,7 @@ impl ShImagesApp {
         self.user_interacted = false;
         self.last_viewport = None;
         self.preload_neighbors();
+        self.request_exif(path);
     }
 
     /// Spawnea un worker que decodifica `path`, lo inserta en el cache y envía
@@ -364,6 +413,34 @@ impl ShImagesApp {
         }
     }
 
+    /// Encolar una petición de EXIF para `path` si aún no está cacheado.
+    fn request_exif(&self, path: &Path) {
+        let present = self
+            .exif_cache
+            .lock()
+            .map(|m| m.contains_key(path))
+            .unwrap_or(false);
+        if present {
+            return;
+        }
+        let _ = self.exif_tx.send(path.to_path_buf());
+    }
+
+    /// Drena las señales "EXIF listo" y hace repaint para repintar el panel.
+    fn poll_exif(&mut self) {
+        let Some(rx) = self.exif_rx.take() else {
+            return;
+        };
+        let mut repaint = false;
+        while rx.try_recv().is_ok() {
+            repaint = true;
+        }
+        self.exif_rx = Some(rx);
+        if repaint {
+            self.ctx.request_repaint();
+        }
+    }
+
     /// Salta a la imagen `index` de la carpeta (click en una miniatura).
     fn navigate_to(&mut self, index: usize) {
         let Some(nav) = &mut self.navigation else {
@@ -460,7 +537,7 @@ impl ShImagesApp {
             Action::Fullscreen => self.toggle_fullscreen(),
             Action::ToggleTheme => self.toggle_theme(),
             Action::ToggleSidebar => self.toggle_sidebar(),
-            Action::ToggleInfo => {}
+            Action::ToggleInfo => self.info_panel.show = !self.info_panel.show,
             Action::EditShortcuts => self.shortcut_dialog.open = true,
         }
     }
@@ -536,6 +613,7 @@ impl eframe::App for ShImagesApp {
 
         self.poll_loader(t);
         self.poll_thumbnails();
+        self.poll_exif();
 
         // Toolbar superior (acciones de la app).
         let action = toolbar::show(
@@ -560,6 +638,14 @@ impl eframe::App for ShImagesApp {
                 let selected = self.sidebar.show(ui, nav, &self.thumb_cache);
                 if let Some(index) = selected {
                     self.navigate_to(index);
+                }
+            }
+        }
+
+        if self.texture.is_some() && self.info_panel.show {
+            if let Some(nav) = &self.navigation {
+                if let Some(path) = nav.current_path() {
+                    info_panel::show(ui, &self.exif_cache, path);
                 }
             }
         }
