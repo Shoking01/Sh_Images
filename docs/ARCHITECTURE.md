@@ -166,4 +166,38 @@
   Un JPEG/TIFF sin bloque APP1 hace que la librería devuelva `Error::NotFound`,
   que se mapea a `Ok(None)` (no es un error).
 - **Alternativas:** `exif` (menos mantenido), parser manual del APP1/TIFF
-  (frágil), lectura síncrona en el UI thread (viola §7.1).
+   (frágil), lectura síncrona en el UI thread (viola §7.1).
+
+## ADR-010: Imagen unificada `LoadedImage` y GIF animado
+
+- **Contexto:** `ImageCache` guardaba una `DynamicImage` por path; un GIF
+  animado son N frames con retardos. `image::open` solo devuelve el primer frame.
+- **Decisión:** `core/image_loader.rs` expone `LoadedImage::{ Static, Animated }`
+  (`AnimatedImage` = frames compuestos + `total_duration`). `load_image` usa
+  `ImageReader` + `GifDecoder` para GIF (retardos clampados a un mínimo de 20 ms)
+  y `ImageCache` guarda `LoadedImage` contabilizando la suma de frames. La app
+  guarda `AnimState` y reconstruye la textura al cambiar de frame
+  (`frame_index_at` / `time_to_next_frame` puros). `insert(DynamicImage)` se
+  mantiene como shim de `insert_loaded`.
+- **Consecuencias:** Miniaturas y pre-carga usan `first_frame()`; el viewer no
+  cambia (pinta una textura; la rotación mesh aplica a cualquier frame). Un GIF
+  de un solo frame se trata como `Static`. `set_limits` en el `GifDecoder`
+  rechaza rápidamente GIFs corruptos que declaren dimensiones absurdas (evita un
+  hang de ~60 s en workers de decodificación).
+- **Alternativas:** cache animado separado (dos pipelines), decodificación bajo
+  demanda en el UI thread (viola §7.1).
+
+## ADR-011: Slideshow automático con intervalo configurable
+
+- **Contexto:** Fase 4 pide avanzar automáticamente por la carpeta.
+- **Decisión:** `core/slideshow.rs` (puro) define `default_interval()` (5 s),
+  `faster`/`slower` (límites 1–60 s) y `elapsed_reached`. Tres acciones:
+  `ToggleSlideshow` (F5), `SlideshowFaster` (","), `SlideshowSlower` (".").
+  `settings.slideshow_interval_secs` persiste el intervalo. En `app.rs`, el
+  auto-avance usa `advance_slideshow()` (no pasa por dispatch y no se pausa a sí
+  mismo); la navegación manual (←/→, miniatura) y el zoom pausan el slideshow.
+- **Consecuencias:** La lógica de velocidad es testeable en `core/`; el intervalo
+  sobrevive reinicios vía settings; el slideshow se despierta con
+  `request_repaint_after`.
+- **Alternativas:** intervalo fijo sin configuración (menos flexible), sin
+  acciones de velocidad (depender solo de settings).
