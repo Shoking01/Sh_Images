@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use crate::core::exif::{read_exif, ExifRead};
 
@@ -41,6 +42,12 @@ use crate::utils::paths::settings_path;
 struct LoadEvent {
     path: PathBuf,
     result: Result<()>,
+}
+
+/// Estado de reproducción del GIF actual (None si la imagen es estática).
+struct AnimState {
+    started: Instant,
+    current_frame: usize,
 }
 
 /// Número de workers del pool de miniaturas (acotado, nunca un thread por imagen).
@@ -98,6 +105,8 @@ pub struct ShImagesApp {
     exif_rx: Option<mpsc::Receiver<()>>,
     /// Estado del panel derecho de info.
     info_panel: InfoPanelState,
+    /// Estado de reproducción de la animación del GIF actual.
+    anim: Option<AnimState>,
 }
 
 impl ShImagesApp {
@@ -200,6 +209,7 @@ impl ShImagesApp {
             exif_tx,
             exif_rx: Some(exif_events_rx),
             info_panel: InfoPanelState::default(),
+            anim: None,
         }
     }
 
@@ -311,6 +321,19 @@ impl ShImagesApp {
         self.last_viewport = None;
         self.preload_neighbors();
         self.request_exif(path);
+        let animated = self
+            .cache
+            .get(path)
+            .map(|e| e.is_animated())
+            .unwrap_or(false);
+        self.anim = if animated {
+            Some(AnimState {
+                started: Instant::now(),
+                current_frame: 0,
+            })
+        } else {
+            None
+        };
     }
 
     /// Spawnea un worker que decodifica `path`, lo inserta en el cache y envía
@@ -439,6 +462,36 @@ impl ShImagesApp {
         if repaint {
             self.ctx.request_repaint();
         }
+    }
+
+    /// Avanza el GIF actual: reconstruye la textura cuando cambia el frame
+    /// activo y programa el repaint para el próximo cambio.
+    fn tick_animation(&mut self) {
+        let Some(anim) = self.anim.as_mut() else {
+            return;
+        };
+        let Some(path) = self
+            .navigation
+            .as_ref()
+            .and_then(|n| n.current_path())
+            .cloned()
+        else {
+            return;
+        };
+        let Some(entry) = self.cache.get(&path) else {
+            return;
+        };
+        if !entry.is_animated() {
+            return;
+        }
+        let elapsed = anim.started.elapsed();
+        let idx = entry.frame_index_at(elapsed);
+        if idx != anim.current_frame {
+            self.texture = Some(make_texture(&self.ctx, entry.frame_at(elapsed)));
+            anim.current_frame = idx;
+        }
+        let wait = entry.time_to_next_frame(elapsed);
+        self.ctx.request_repaint_after(wait);
     }
 
     /// Salta a la imagen `index` de la carpeta (click en una miniatura).
@@ -614,6 +667,7 @@ impl eframe::App for ShImagesApp {
         self.poll_loader(t);
         self.poll_thumbnails();
         self.poll_exif();
+        self.tick_animation();
 
         // Toolbar superior (acciones de la app).
         let action = toolbar::show(
