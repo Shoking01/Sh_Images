@@ -58,7 +58,6 @@ fn main() {
         ico_bytes.len()
     );
 
-    #[cfg(windows)]
     embed_icon(&ico_bytes);
 }
 
@@ -137,16 +136,16 @@ fn encode_ico(rgba_bufs: &[(u32, Vec<u8>)]) -> Vec<u8> {
 }
 
 /// En Windows: incrusta el icono en el .exe usando `winres`.
-#[cfg(windows)]
+/// En Linux/macOS: no-op (el icono se usa solo en Windows).
 fn embed_icon(ico_bytes: &[u8]) {
-    let out_dir = std::env::var("OUT_DIR").unwrap();
-    let ico_path = PathBuf::from(&out_dir).join("embed.ico");
-    fs::write(&ico_path, ico_bytes).expect("write embed.ico");
+    #[cfg(windows)]
+    {
+        let out_dir = std::env::var("OUT_DIR").unwrap();
+        let ico_path = std::path::Path::new(&out_dir).join("embed.ico");
+        std::fs::write(&ico_path, ico_bytes).expect("write embed.ico");
 
-    let mut rc = winres::WindowsResource::new();
-    rc.set_icon("embed.ico");
-    rc.compile().expect("winres compile failed");
+        let mut rc = winres::WindowsResource::new();
+        rc.set_icon("embed.ico");
+        rc.compile().expect("winres compile failed");
+    }
 }
-
-#[cfg(not(windows))]
-fn embed_icon(_ico_bytes: &[u8]) {}
