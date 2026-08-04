@@ -148,4 +148,7 @@ fn embed_icon(ico_bytes: &[u8]) {
         rc.set_icon("embed.ico");
         rc.compile().expect("winres compile failed");
     }
+
+    #[cfg(not(windows))]
+    let _ = ico_bytes;
 }
