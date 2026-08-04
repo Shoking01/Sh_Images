@@ -186,6 +186,7 @@ fn flujo_configuracion_persistencia() {
         cache_memory_limit_mb: 256,
         theme: "light".to_string(),
         shortcuts: ShortcutMap::defaults(),
+        slideshow_interval_secs: 5,
     };
     modified.save(&path).expect("guardar modificado");
 
