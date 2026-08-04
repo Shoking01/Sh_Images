@@ -6,19 +6,21 @@
 mod common;
 
 use std::ops::Add;
+use std::time::Duration;
 
 use sh_images::config::settings::Settings;
 use sh_images::core::exif::read_exif;
 use sh_images::core::image_cache::ImageCache;
-use sh_images::core::image_loader::load_image;
+use sh_images::core::image_loader::{load_image, LoadedImage};
 use sh_images::core::navigation::{Navigation, SUPPORTED_EXTENSIONS};
 use sh_images::core::preload::{preload_targets, PRELOAD_DEPTH};
 use sh_images::core::shortcuts::ShortcutMap;
+use sh_images::core::slideshow;
 use sh_images::core::view::{Vec2, ViewTransform};
 
 use common::{
-    copy_fixture, corrupt_png_path, empty_png_path, gif_path, make_folder_with_images,
-    make_folder_with_rect_images,
+    copy_fixture, corrupt_png_path, empty_png_path, gif_path, make_animated_gif,
+    make_folder_with_images, make_folder_with_rect_images,
 };
 
 /// Flujo 1 — Apertura: abrir → decodificar → cachear.
@@ -246,4 +248,67 @@ fn flujo_exif() {
 
     let png = copy_fixture(dir.path(), "sample.png");
     assert_eq!(read_exif(&png).expect("ok"), None, "PNG sin EXIF → None");
+}
+
+/// Flujo 8 — GIF animado: cargar, verificar frames/retardos y selección por
+/// tiempo; un GIF corrupto no crashea.
+#[test]
+fn flujo_gif_animado() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let gif = make_animated_gif(dir.path(), &[100, 200]);
+    let loaded = load_image(&gif).expect("gif válido");
+    let LoadedImage::Animated(anim) = &loaded else {
+        panic!("gif de 2 frames debe ser Animated");
+    };
+    assert_eq!(anim.frames.len(), 2);
+    assert_eq!(anim.frames[0].delay, Duration::from_millis(100));
+    assert_eq!(anim.frames[1].delay, Duration::from_millis(200));
+    assert_eq!(anim.total_duration, Duration::from_millis(300));
+
+    assert_eq!(loaded.frame_index_at(Duration::from_millis(0)), 0);
+    assert_eq!(loaded.frame_index_at(Duration::from_millis(150)), 1);
+    assert_eq!(loaded.frame_index_at(Duration::from_millis(300)), 0);
+
+    let corrupt = dir.path().join("corrupt.gif");
+    std::fs::write(&corrupt, b"GIF89a not really a gif").expect("escribir");
+    let err = load_image(&corrupt).expect_err("gif corrupto da error");
+    assert!(
+        matches!(
+            err,
+            sh_images::utils::errors::ShImagesError::Decode(_)
+                | sh_images::utils::errors::ShImagesError::Io(_)
+        ),
+        "gif corrupto no crashea"
+    );
+}
+
+/// Flujo 9 — Slideshow: límites del intervalo y default de 5 s.
+#[test]
+fn flujo_slideshow_interval() {
+    assert_eq!(slideshow::default_interval(), Duration::from_secs(5));
+    assert_eq!(
+        slideshow::faster(Duration::from_secs(5)),
+        Duration::from_millis(2500)
+    );
+    assert_eq!(
+        slideshow::slower(Duration::from_secs(5)),
+        Duration::from_secs(10)
+    );
+    assert_eq!(
+        slideshow::faster(Duration::from_secs(1)),
+        Duration::from_secs(1)
+    );
+    assert_eq!(
+        slideshow::slower(Duration::from_secs(60)),
+        Duration::from_secs(60)
+    );
+    assert!(slideshow::elapsed_reached(
+        Duration::from_secs(5),
+        Duration::from_secs(5)
+    ));
+    assert!(!slideshow::elapsed_reached(
+        Duration::from_secs(4),
+        Duration::from_secs(5)
+    ));
 }

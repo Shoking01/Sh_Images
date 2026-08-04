@@ -5,8 +5,10 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+use image::codecs::gif::GifEncoder;
+use image::{Delay, DynamicImage, Frame, ImageFormat, Rgba, RgbaImage};
 use tempfile::tempdir;
 
 /// Crea una imagen de gradiente determinista (misma lógica que benches/common).
@@ -72,6 +74,24 @@ pub fn gif_path(dir: &Path) -> PathBuf {
     gradient_image(1, 1)
         .save_with_format(&path, ImageFormat::Gif)
         .expect("guardar gif");
+    path
+}
+
+/// Guarda un GIF animado sintético con `delays_ms` retardos por frame.
+pub fn make_animated_gif(dir: &Path, delays_ms: &[u64]) -> PathBuf {
+    let path = dir.join("animated.gif");
+    let mut out = fs::File::create(&path).expect("crear gif");
+    let mut encoder = GifEncoder::new(&mut out);
+    let frames = delays_ms.iter().map(|&ms| {
+        let buf = gradient_image(8, 8).to_rgba8();
+        Frame::from_parts(
+            buf,
+            0,
+            0,
+            Delay::from_saturating_duration(Duration::from_millis(ms)),
+        )
+    });
+    encoder.encode_frames(frames).expect("encodificar gif");
     path
 }
 
