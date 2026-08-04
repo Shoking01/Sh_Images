@@ -7,7 +7,6 @@ mod common;
 
 use std::ops::Add;
 
-use image::GenericImageView;
 use sh_images::config::settings::Settings;
 use sh_images::core::exif::read_exif;
 use sh_images::core::image_cache::ImageCache;
@@ -40,7 +39,7 @@ fn flujo_apertura_completo() {
     assert_eq!((w, h), (64, 64), "la imagen sintética es 64x64");
 
     let cache = ImageCache::new(512);
-    let result = cache.insert(target.clone(), image);
+    let result = cache.insert_loaded(target.clone(), image);
     assert!(result.cached, "la imagen 64x64 cabe en el LRU 512MiB");
     let entry = cache.get(target).expect("re-leer del cache");
     assert_eq!(

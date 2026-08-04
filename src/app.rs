@@ -8,7 +8,7 @@ use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use crate::core::exif::{read_exif, ExifRead};
 
 use eframe::egui;
-use image::{DynamicImage, GenericImageView};
+use image::DynamicImage;
 
 use crate::config::settings::Settings;
 use crate::core::actions::Action;
@@ -135,7 +135,7 @@ impl ShImagesApp {
                     }
                     match image {
                         Ok(image) => {
-                            let thumb = generate_thumbnail(&image, THUMB_MAX);
+                            let thumb = generate_thumbnail(image.first_frame(), THUMB_MAX);
                             cache.insert(path.clone(), thumb);
                         }
                         Err(e) => {
@@ -287,7 +287,7 @@ impl ShImagesApp {
     /// pueda mutar `self` libremente después.
     fn texture_from_cache(&self, path: &std::path::Path) -> Option<(egui::TextureHandle, Vec2)> {
         let entry = self.cache.get(path)?;
-        let texture = make_texture(&self.ctx, &entry);
+        let texture = make_texture(&self.ctx, entry.first_frame());
         let size = entry.dimensions();
         Some((texture, Vec2::new(size.0 as f32, size.1 as f32)))
     }
@@ -332,7 +332,7 @@ impl ShImagesApp {
         let ctx = self.ctx.clone();
         std::thread::spawn(move || {
             let result = load_image(&path).map(|image| {
-                cache.insert(path.clone(), image);
+                cache.insert_loaded(path.clone(), image);
             });
             in_flight
                 .lock()

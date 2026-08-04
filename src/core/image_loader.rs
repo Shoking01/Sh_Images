@@ -1,30 +1,77 @@
 //! Carga y decodificación síncrona de imágenes.
-//!
-//! En Fase 0 se implementa la variante síncrona mínima para el benchmark base.
-//! La carga asíncrona (threads worker) llega en Fase 2.
 
 use std::path::Path;
 
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView, ImageReader};
 
 use crate::utils::errors::{Result, ShImagesError};
 
+/// Un frame de una imagen animada: buffer RGBA ya compuesto + retardo.
+#[derive(Debug)]
+pub struct AnimatedFrame {
+    pub image: DynamicImage,
+    pub delay: std::time::Duration,
+}
+
+/// Imagen animada (GIF): frames en orden de reproducción y duración total.
+///
+/// El loader garantiza `frames` no vacío y `total_duration > 0`.
+#[derive(Debug)]
+pub struct AnimatedImage {
+    pub frames: Vec<AnimatedFrame>,
+    pub total_duration: std::time::Duration,
+}
+
+/// Imagen decodificada: estática o animada.
+#[derive(Debug)]
+pub enum LoadedImage {
+    Static(DynamicImage),
+    Animated(AnimatedImage),
+}
+
+impl From<DynamicImage> for LoadedImage {
+    fn from(image: DynamicImage) -> Self {
+        LoadedImage::Static(image)
+    }
+}
+
+impl LoadedImage {
+    /// `true` si la imagen tiene animación (varios frames).
+    pub fn is_animated(&self) -> bool {
+        matches!(self, LoadedImage::Animated(_))
+    }
+
+    /// Dimensiones de la imagen (las del primer frame; todos comparten tamaño).
+    pub fn dimensions(&self) -> (u32, u32) {
+        self.first_frame().dimensions()
+    }
+
+    /// Primer frame (imagen completa para `Static`).
+    pub fn first_frame(&self) -> &DynamicImage {
+        match self {
+            LoadedImage::Static(img) => img,
+            LoadedImage::Animated(anim) => &anim.frames[0].image,
+        }
+    }
+}
+
 /// Carga y decodifica una imagen desde el filesystem.
 ///
-/// # Arguments
-/// * `path` - Ruta absoluta al archivo de imagen.
-///
-/// # Returns
-/// * `Ok(DynamicImage)` si la decodificación fue exitosa.
-/// * `Err(ShImagesError::Io)` si hay problemas de lectura del filesystem.
-/// * `Err(ShImagesError::UnsupportedFormat)` si la extensión no corresponde a un formato soportado.
-/// * `Err(ShImagesError::Decode)` si el archivo está corrupto.
-pub fn load_image(path: &Path) -> Result<DynamicImage> {
-    image::open(path).map_err(|e| match e {
+/// Por ahora devuelve el primer frame como `Static` (la rama GIF animado se
+/// añade en la Task 2).
+pub fn load_image(path: &Path) -> Result<LoadedImage> {
+    let reader = ImageReader::open(path)?;
+    let reader = reader.with_guessed_format()?;
+    let image = reader.decode().map_err(map_image_error)?;
+    Ok(LoadedImage::Static(image))
+}
+
+fn map_image_error(e: image::ImageError) -> ShImagesError {
+    match e {
         image::ImageError::IoError(io) => ShImagesError::Io(io),
         image::ImageError::Unsupported(msg) => ShImagesError::UnsupportedFormat(msg.to_string()),
         other => ShImagesError::Decode(other.to_string()),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -41,21 +88,21 @@ mod tests {
     }
 
     #[test]
-    fn decoding_valid_png_returns_image() {
+    fn decoding_valid_png_returns_static_image() {
         let img = load_image(&fixture()).unwrap();
-        assert_eq!(img.width(), 1);
-        assert_eq!(img.height(), 1);
+        assert_eq!(img.dimensions(), (1, 1));
+        assert!(!img.is_animated());
+        assert_eq!(img.first_frame().width(), 1);
     }
 
     #[test]
-    fn decoding_valid_jpeg_returns_image() {
+    fn decoding_valid_jpeg_returns_static_image() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
             .join("fixtures")
             .join("sample.jpg");
         let img = load_image(&path).unwrap();
-        assert_eq!(img.width(), 16);
-        assert_eq!(img.height(), 16);
+        assert_eq!(img.dimensions(), (16, 16));
     }
 
     #[test]
