@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <!--
+    Files.wxs: componentes de archivo instalados en INSTALLFOLDER.
+    sh_images.exe: binario release (generado por cargo build --release).
+    icon.ico: generado por build.rs, copiado a installer/windows/ por CI.
+  -->
+  <Fragment>
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="AppComponents" Guid="B2C4D6E8-F1A3-4B5C-9D8E-0F1E2D3C4B5A" KeyPath="yes">
+        <File Id="ShImagesExe" Source="$(var.ReleaseDir)sh_images.exe" KeyPath="yes" />
+        <File Id="AppIconFile" Source="icon.ico" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

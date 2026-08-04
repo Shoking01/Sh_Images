@@ -4,9 +4,8 @@ Visor de imágenes ligero, rápido y nativo en Rust (`egui` + `eframe`).
 
 ## Estado
 
-En desarrollo — Fase 5 (packaging/distribución) pendiente. Completas: Fases
-0–4 (fundamentos, visor básico, cache y rendimiento, UI/UX polish, metadatos
-EXIF + GIF animado + slideshow). Ver `Plan.md` para el roadmap.
+En desarrollo — Fases 0–5 completas (incluye MSI packaging para Windows).
+Ver `Plan.md` para el roadmap.
 
 ## Requisitos
 
@@ -18,6 +17,20 @@ EXIF + GIF animado + slideshow). Ver `Plan.md` para el roadmap.
 ```bash
 cargo run
 ```
+
+### Instalación en Windows (release)
+
+Download the [MSI installer from GitHub Releases](https://github.com/AdrianQuiros/Sh_Images/releases).
+Run it, then double-click any supported image (PNG, JPEG, BMP, GIF, WebP, TIFF)
+to open it with Sh_Images.
+
+CLI (opcional):
+
+```bat
+sh_images.exe "C:\ruta\a\foto.png"
+```
+
+Ver `docs/DISTRIBUTION.md` para el proceso de release completo.
 
 ## QA local (antes de commit)
 

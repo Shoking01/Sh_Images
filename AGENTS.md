@@ -189,6 +189,24 @@ Antes de agregar cualquier crate a `Cargo.toml`:
 
 ---
 
+### 7.4 Packaging (Windows)
+Aplicable a la Fase 5 (packaging). Reglas obligatorias:
+
+- **`UpgradeCode` GUID es inmutable**: se define una vez en `Product.wxs`
+  (actualmente `37f3b815-2bae-4e7b-880a-ec41fbc1b012`). Cambiarlo crea una
+  entrada duplicada en "Agregar o quitar programas". Si se necesita un GUID
+  nuevo, abrir un issue explicando el motivo.
+- **Versión del MSI sincronizada** con `Cargo.toml` via `VERSION` env en
+  `build.cmd` (derivado de `CARGO_PKG_VERSION`). Nunca hardcodear versión
+  en `.wxs` a menos que sea para un release puntual.
+- **Icono generado en build-time** (`build.rs` → `OUT_DIR/icon.ico`). El
+  archivo `installer/windows/icon.ico` es un artifact del build (NO commiteado
+  — está en `.gitignore`) y es copiado al dir del instalador por CI.
+- **Smoke test en CI**: validar existencia + tamaño del MSI (<30MB). No instalar
+  ni ejecutar en headless CI (frágil). Ver `.github/workflows/release.yml`.
+- **`windows_subsystem = "windows"`** en `main.rs` (no consola). El `.exe`
+  distribuible NO debe mostrar ventana de terminal.
+
 ## 8. Tests de Integración Obligatorios
 
 ### 8.1 Flujos Criticos

@@ -4,6 +4,15 @@ version = "0.1.0"
 edition = "2021"
 # MSRV: eframe/egui 0.35 requieren Rust 1.92 (ver ADR-005).
 rust-version = "1.92"
+# build.rs genera assets/icon.ico desde assets/icon.svg.
+build = "build.rs"
+
+# Release profile optimizado para tamaño (AGENTS.md §6.1: binario <20MB).
+# strip elimina symbols, lto=true + codegen-units=1 permiten cross-module opts.
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
 
 [lib]
 name = "sh_images"
@@ -35,6 +44,7 @@ harness = false
 
 [dependencies]
 # GUI — eframe/egui: framework immediate-mode nativo, fijado por Plan.md.
+# NOTA: el backend por defecto (wgpu) produce un binario >20MB. Ver ADR-001.
 eframe = "0.35"
 egui = "0.35"
 # Diálogo de archivos nativo (abrir imágenes) — justificación: estándar en el
@@ -62,3 +72,12 @@ criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
 # Snapshot testing de estado/lógica UI (AGENTS.md §4.4, Plan.md Fase 3).
 insta = { version = "1", features = ["yaml"] }
+
+[build-dependencies]
+# Icon rendering at build time (Fase 5). SVG → PNG → .ico.
+# resvg re-exporta usvg+tiny-skia internamente y expone render().
+resvg = { version = "0.43", default-features = false }
+ico = "0.5"
+# Windows only: embed icon into .exe (needs rc.exe on MSVC toolchain).
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"

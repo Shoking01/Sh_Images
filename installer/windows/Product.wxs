@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <!--
+    Product.wxs — definición del MSI para Sh_Images.
+    - InstallScope: perMachine (requiere admin; instala en Program Files).
+    - Version: sincronizado con CARGO_PKG_VERSION vía -dVersion en build.cmd.
+    - UpgradeCode: GUID inmutable (cambiarlo requiere issue). Ver ADR-012.
+  -->
+  <Product
+    Id="*"
+    Name="Sh_Images"
+    Language="1033"
+    Version="$(var.Version)"
+    Manufacturer="Adrián Quirós"
+    UpgradeCode="37f3b815-2bae-4e7b-880a-ec41fbc1b012">
+    <Package
+      InstallerVersion="200"
+      Compressed="yes"
+      InstallScope="perMachine"
+      Platform="x64"
+      SummaryCodepage="1252" />
+    <MediaTemplate />
+
+    <Icon Id="AppIcon" SourceFile="icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+
+    <MajorUpgrade
+      DowngradeErrorMessage="Una versión más reciente de Sh_Images ya está instalada." />
+
+    <!-- Directorio de instalación: C:\Program Files\Sh_Images -->
+    <Directory Id="ProgramFilesFolder">
+      <Directory Id="INSTALLFOLDER" Name="Sh_Images" />
+    </Directory>
+
+    <!-- Feature principal: incluye todos los componentes -->
+    <Feature
+      Id="MainApplication"
+      Title="Sh_Images"
+      Level="1">
+      <ComponentRef Id="AppComponents" />
+      <ComponentRef Id="FileAssociations" />
+      <ComponentRef Id="StartMenuShortcuts" />
+    </Feature>
+
+    <UIRef Id="WixUI_Minimal" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+  </Product>
+
+  <Fragment>
+    <DirectoryRef Id="TARGETDIR" />
+  </Fragment>
+</Wix>

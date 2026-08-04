@@ -1,0 +1,101 @@
+name: Release
+
+# Dispara solo en tags v* y manualmente. Genera el MSI de Windows +
+# artefactos release para macOS/Linux (build binario; installers pendientes
+# — ver docs/DISTRIBUTION.md). Ver Plan.md §Fase 5.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-windows-release:
+    name: Build Windows Release (MSI)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install WiX 3.14
+        # WiX es el toolset para generar el MSI. choco instala candle.exe + light.exe.
+        run: choco install wix --version=3.14.0 -y
+
+      - name: Build release binary
+        run: cargo build --release --locked
+        # windows_subsystem=windows está configurado en .cargo/config.toml o
+        # vía linker arg; el .exe sale sin consola.
+
+      - name: Copy icon.ico to installer dir
+        run: |
+          $ico = Get-ChildItem -Recurse -Filter icon.ico target\release\build | Select-Object -First 1
+          if (-not $ico) { throw "icon.ico no generado por build.rs" }
+          Copy-Item $ico.FullName installer\windows\icon.ico
+
+      - name: Build MSI
+        working-directory: installer/windows
+        env:
+          VERSION: ${{ github.ref_name }}
+          RELEASE_DIR: ..\..\target\release
+        run: cmd /c build.cmd
+
+      - name: Validate MSI artifact
+        run: |
+          $msi = Get-Item installer\windows\sh_images-${{ github.ref_name }}-x64.msi
+          if (-not $msi) { throw "MSI was not generated" }
+          if ($msi.Length -gt 30MB) {
+            throw "MSI size $($msi.Length) exceeds 30MB limit (AGENTS.md §6.1)"
+          }
+          Write-Host "MSI size: $([math]::Round($msi.Length / 1MB, 2)) MB"
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sh_images-${{ github.ref_name }}-windows-x64-msi
+          path: installer/windows/*.msi
+          retention-days: 14
+
+  build-other-platforms:
+    name: Build binaries (macOS, Linux)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sh_images-${{ github.ref_name }}-${{ runner.os }}
+          path: target/release/sh_images
+          retention-days: 14
+          if-no-files-found: warn
+
+# Notas:
+# - macOS/Linux: solo compila el binario. El .app bundle y .deb/.AppImage
+#   están pendientes (Fase 5b). Ver docs/DISTRIBUTION.md.
+# - smoke test: valida existencia + size del MSI en CI. No instala ni ejecuta
+#   el MSI (período de espera UI en headless CI es frágil). Ver AGENTS.md §5.1.

@@ -126,12 +126,20 @@ sh_images/
 - [x] **Tests**: extracción EXIF de múltiples formatos, manejo de archivos corruptos
 
 ### Fase 5 — Packaging y Distribución (Semana 6)
-- [ ] Icono de aplicación por plataforma
-- [ ] `.exe` installer para Windows (WiX/NSIS)
-- [ ] `.app` bundle para macOS
-- [ ] `.AppImage` / `.deb` para Linux
-- [ ] Asociación de archivos de imagen con la app
-- [ ] **Smoke tests** en cada plataforma objetivo
+
+#### 5.0 — Windows (completado 2026-08-04)
+- [x] Icono de aplicación multi-resolución (`.ico` desde `assets/icon.svg` via `build.rs`)
+- [x] `.exe` installer para Windows (MSI con WiX 3.14, `perMachine`, `x64`)
+- [ ] `.app` bundle para macOS (pendiente Fase 5b)
+- [ ] `.AppImage` / `.deb` para Linux (pendiente Fase 5b)
+- [x] Asociación de archivos de imagen con la app (PNG/JPEG/BMP/GIF/WebP/TIFF)
+- [x] **Smoke tests** en CI (validación size MSI <30MB, build release)
+
+#### 5.1 — macOS (Fase 5b, pendiente)
+- `.app` bundle + code signing para notarization.
+
+#### 5.2 — Linux (Fase 5b, pendiente)
+- `.AppImage` (portable) + `.deb` (Debian/Ubuntu) + `.desktop` entry.
 
 ---
 
