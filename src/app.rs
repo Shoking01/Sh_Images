@@ -1,12 +1,15 @@
 //! Estado global de la aplicación y loop principal de `egui`.
 
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
+use crate::core::exif::{read_exif, ExifRead};
 
 use eframe::egui;
-use image::{DynamicImage, GenericImageView};
+use image::DynamicImage;
 
 use crate::config::settings::Settings;
 use crate::core::actions::Action;
@@ -15,13 +18,20 @@ use crate::core::image_loader::load_image;
 use crate::core::navigation::{Navigation, SUPPORTED_EXTENSIONS};
 use crate::core::preload::{preload_targets, PRELOAD_DEPTH};
 use crate::core::shortcuts::ShortcutMap;
+use crate::core::slideshow;
 use crate::core::thumb_queue::ThumbQueue;
 use crate::core::thumbnail_cache::ThumbnailCache;
 use crate::core::thumbnail_gen::{generate_thumbnail, THUMB_MAX};
 use crate::core::view::{Vec2, ViewTransform};
 use crate::ui::{
-    shortcut_dialog::ShortcutDialog, sidebar::SidebarState, statusbar, statusbar::StatusInfo,
-    theme, toast::Toasts, toolbar, viewer,
+    info_panel::{self, InfoPanelState},
+    shortcut_dialog::ShortcutDialog,
+    sidebar::SidebarState,
+    statusbar,
+    statusbar::StatusInfo,
+    theme,
+    toast::Toasts,
+    toolbar, viewer,
 };
 use crate::utils::errors::Result;
 use crate::utils::paths::settings_path;
@@ -33,6 +43,12 @@ use crate::utils::paths::settings_path;
 struct LoadEvent {
     path: PathBuf,
     result: Result<()>,
+}
+
+/// Estado de reproducción del GIF actual (None si la imagen es estática).
+struct AnimState {
+    started: Instant,
+    current_frame: usize,
 }
 
 /// Número de workers del pool de miniaturas (acotado, nunca un thread por imagen).
@@ -57,7 +73,7 @@ pub struct ShImagesApp {
     /// Receptor persistente del canal único.
     rx: Option<mpsc::Receiver<LoadEvent>>,
     toasts: Toasts,
-    /// `true` si el usuario ha hecho zoom/pan con la imagen actual.
+    /// `true` si el usuario ha hecho zoom con la imagen actual.
     user_interacted: bool,
     /// Último tamaño del canvas; se usa para re-fitear al redimensionar.
     last_viewport: Option<Vec2>,
@@ -82,6 +98,22 @@ pub struct ShImagesApp {
     shortcut_dialog: ShortcutDialog,
     /// Tamaño en disco cacheado por path (evita `fs::metadata` por frame).
     size_for: Option<(PathBuf, u64)>,
+    /// Cache de EXIF por path (se limpia al abrir una carpeta).
+    exif_cache: Arc<Mutex<HashMap<PathBuf, ExifRead>>>,
+    /// Emisor de peticiones de EXIF (UI → worker).
+    exif_tx: mpsc::Sender<PathBuf>,
+    /// Receptor de avisos "EXIF listo" (solo dispara repaint).
+    exif_rx: Option<mpsc::Receiver<()>>,
+    /// Estado del panel derecho de info.
+    info_panel: InfoPanelState,
+    /// Estado de reproducción de la animación del GIF actual.
+    anim: Option<AnimState>,
+    /// Si el slideshow automático está activo.
+    slideshow_active: bool,
+    /// Intervalo actual del slideshow.
+    slideshow_interval: Duration,
+    /// Última vez que el slideshow avanzó de imagen.
+    slideshow_last_advance: Instant,
 }
 
 impl ShImagesApp {
@@ -119,7 +151,7 @@ impl ShImagesApp {
                     }
                     match image {
                         Ok(image) => {
-                            let thumb = generate_thumbnail(&image, THUMB_MAX);
+                            let thumb = generate_thumbnail(image.first_frame(), THUMB_MAX);
                             cache.insert(path.clone(), thumb);
                         }
                         Err(e) => {
@@ -128,6 +160,31 @@ impl ShImagesApp {
                     }
                     if events_tx.send(()).is_err() {
                         tracing::debug!("thumbnail event dropped (receiver gone)");
+                    }
+                    ctx.request_repaint();
+                }
+            });
+        }
+        let (exif_tx, exif_rx) = mpsc::channel::<PathBuf>();
+        let (exif_events_tx, exif_events_rx) = mpsc::channel::<()>();
+        let exif_cache = Arc::new(Mutex::new(HashMap::new()));
+        let slideshow_interval = Duration::from_secs(settings.slideshow_interval_secs.max(1));
+        {
+            let cache = exif_cache.clone();
+            let events_tx = exif_events_tx.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                while let Ok(path) = exif_rx.recv() {
+                    let result = match read_exif(&path) {
+                        Ok(Some(img)) => ExifRead::Found(img),
+                        Ok(None) => ExifRead::None,
+                        Err(e) => ExifRead::Error(e),
+                    };
+                    if let Ok(mut m) = cache.lock() {
+                        m.insert(path, result);
+                    }
+                    if events_tx.send(()).is_err() {
+                        tracing::debug!("exif event dropped (receiver gone)");
                     }
                     ctx.request_repaint();
                 }
@@ -156,6 +213,14 @@ impl ShImagesApp {
             is_fullscreen: false,
             shortcut_dialog: ShortcutDialog::default(),
             size_for: None,
+            exif_cache,
+            exif_tx,
+            exif_rx: Some(exif_events_rx),
+            info_panel: InfoPanelState::default(),
+            anim: None,
+            slideshow_active: false,
+            slideshow_interval,
+            slideshow_last_advance: Instant::now(),
         }
     }
 
@@ -200,6 +265,10 @@ impl ShImagesApp {
                 // drenado cada worker consumiría (y descartaría) un path obsoleto
                 // antes de llegar a los nuevos.
                 self.thumb_queue.drain();
+                self.exif_cache
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clear();
                 for image_path in &nav.images {
                     self.thumb_queue.push(image_path.clone());
                 }
@@ -239,7 +308,7 @@ impl ShImagesApp {
     /// pueda mutar `self` libremente después.
     fn texture_from_cache(&self, path: &std::path::Path) -> Option<(egui::TextureHandle, Vec2)> {
         let entry = self.cache.get(path)?;
-        let texture = make_texture(&self.ctx, &entry);
+        let texture = make_texture(&self.ctx, entry.first_frame());
         let size = entry.dimensions();
         Some((texture, Vec2::new(size.0 as f32, size.1 as f32)))
     }
@@ -262,6 +331,20 @@ impl ShImagesApp {
         self.user_interacted = false;
         self.last_viewport = None;
         self.preload_neighbors();
+        self.request_exif(path);
+        let animated = self
+            .cache
+            .get(path)
+            .map(|e| e.is_animated())
+            .unwrap_or(false);
+        self.anim = if animated {
+            Some(AnimState {
+                started: Instant::now(),
+                current_frame: 0,
+            })
+        } else {
+            None
+        };
     }
 
     /// Spawnea un worker que decodifica `path`, lo inserta en el cache y envía
@@ -283,7 +366,7 @@ impl ShImagesApp {
         let ctx = self.ctx.clone();
         std::thread::spawn(move || {
             let result = load_image(&path).map(|image| {
-                cache.insert(path.clone(), image);
+                cache.insert_loaded(path.clone(), image);
             });
             in_flight
                 .lock()
@@ -364,8 +447,67 @@ impl ShImagesApp {
         }
     }
 
+    /// Encolar una petición de EXIF para `path` si aún no está cacheado.
+    fn request_exif(&self, path: &Path) {
+        let present = self
+            .exif_cache
+            .lock()
+            .map(|m| m.contains_key(path))
+            .unwrap_or(false);
+        if present {
+            return;
+        }
+        let _ = self.exif_tx.send(path.to_path_buf());
+    }
+
+    /// Drena las señales "EXIF listo" y hace repaint para repintar el panel.
+    fn poll_exif(&mut self) {
+        let Some(rx) = self.exif_rx.take() else {
+            return;
+        };
+        let mut repaint = false;
+        while rx.try_recv().is_ok() {
+            repaint = true;
+        }
+        self.exif_rx = Some(rx);
+        if repaint {
+            self.ctx.request_repaint();
+        }
+    }
+
+    /// Avanza el GIF actual: reconstruye la textura cuando cambia el frame
+    /// activo y programa el repaint para el próximo cambio.
+    fn tick_animation(&mut self) {
+        let Some(anim) = self.anim.as_mut() else {
+            return;
+        };
+        let Some(path) = self
+            .navigation
+            .as_ref()
+            .and_then(|n| n.current_path())
+            .cloned()
+        else {
+            return;
+        };
+        let Some(entry) = self.cache.get(&path) else {
+            return;
+        };
+        if !entry.is_animated() {
+            return;
+        }
+        let elapsed = anim.started.elapsed();
+        let idx = entry.frame_index_at(elapsed);
+        if idx != anim.current_frame {
+            self.texture = Some(make_texture(&self.ctx, entry.frame_at(elapsed)));
+            anim.current_frame = idx;
+        }
+        let wait = entry.time_to_next_frame(elapsed);
+        self.ctx.request_repaint_after(wait);
+    }
+
     /// Salta a la imagen `index` de la carpeta (click en una miniatura).
     fn navigate_to(&mut self, index: usize) {
+        self.pause_slideshow();
         let Some(nav) = &mut self.navigation else {
             return;
         };
@@ -381,6 +523,53 @@ impl ShImagesApp {
     /// Alterna la visibilidad del sidebar.
     fn toggle_sidebar(&mut self) {
         self.sidebar.show = !self.sidebar.show;
+    }
+
+    /// Alterna el slideshow y reinicia su contador.
+    fn toggle_slideshow(&mut self) {
+        self.slideshow_active = !self.slideshow_active;
+        self.slideshow_last_advance = Instant::now();
+        self.ctx.request_repaint();
+        tracing::info!(active = self.slideshow_active, "slideshow toggled");
+    }
+
+    /// Ajusta la velocidad del slideshow y persiste el intervalo.
+    fn change_slideshow_speed(&mut self, faster: bool) {
+        self.slideshow_interval = if faster {
+            slideshow::faster(self.slideshow_interval)
+        } else {
+            slideshow::slower(self.slideshow_interval)
+        };
+        self.settings.slideshow_interval_secs = self.slideshow_interval.as_secs().max(1);
+        if let Ok(path) = settings_path() {
+            if let Err(e) = self.settings.save(&path) {
+                tracing::warn!(error = %e, "failed to persist slideshow interval");
+            }
+        }
+        self.slideshow_last_advance = Instant::now();
+        tracing::info!(
+            interval_secs = self.settings.slideshow_interval_secs,
+            "slideshow speed changed"
+        );
+    }
+
+    /// Avanza una imagen sin pausar el slideshow (auto-avance).
+    fn advance_slideshow(&mut self) {
+        self.slideshow_last_advance = Instant::now();
+        if let Some(nav) = &mut self.navigation {
+            nav.next();
+            if let Some(path) = nav.current_path().cloned() {
+                self.start_load(path);
+            }
+        }
+    }
+
+    /// Detiene el slideshow por interacción manual del usuario.
+    fn pause_slideshow(&mut self) {
+        if self.slideshow_active {
+            self.slideshow_active = false;
+            tracing::info!("slideshow paused by user interaction");
+        }
     }
 
     /// Dispara la pre-carga de N±1 usando `preload_targets`.
@@ -447,8 +636,14 @@ impl ShImagesApp {
     fn dispatch(&mut self, action: Action) {
         match action {
             Action::Open => self.open_dialog(),
-            Action::Prev => self.navigate(-1),
-            Action::Next => self.navigate(1),
+            Action::Prev => {
+                self.pause_slideshow();
+                self.navigate(-1);
+            }
+            Action::Next => {
+                self.pause_slideshow();
+                self.navigate(1);
+            }
             Action::RotateCw => self.rotate_image(true),
             Action::RotateCcw => self.rotate_image(false),
             Action::Fit => {
@@ -460,6 +655,10 @@ impl ShImagesApp {
             Action::Fullscreen => self.toggle_fullscreen(),
             Action::ToggleTheme => self.toggle_theme(),
             Action::ToggleSidebar => self.toggle_sidebar(),
+            Action::ToggleInfo => self.info_panel.show = !self.info_panel.show,
+            Action::ToggleSlideshow => self.toggle_slideshow(),
+            Action::SlideshowFaster => self.change_slideshow_speed(true),
+            Action::SlideshowSlower => self.change_slideshow_speed(false),
             Action::EditShortcuts => self.shortcut_dialog.open = true,
         }
     }
@@ -535,6 +734,18 @@ impl eframe::App for ShImagesApp {
 
         self.poll_loader(t);
         self.poll_thumbnails();
+        self.poll_exif();
+        self.tick_animation();
+
+        if self.slideshow_active && self.navigation.is_some() {
+            if slideshow::elapsed_reached(
+                self.slideshow_last_advance.elapsed(),
+                self.slideshow_interval,
+            ) {
+                self.advance_slideshow();
+            }
+            self.ctx.request_repaint_after(self.slideshow_interval);
+        }
 
         // Toolbar superior (acciones de la app).
         let action = toolbar::show(
@@ -542,6 +753,7 @@ impl eframe::App for ShImagesApp {
             &self.shortcuts,
             &self.settings.theme,
             self.is_fullscreen,
+            self.slideshow_active,
         );
         if let Some(action) = action {
             self.dispatch(action);
@@ -559,6 +771,14 @@ impl eframe::App for ShImagesApp {
                 let selected = self.sidebar.show(ui, nav, &self.thumb_cache);
                 if let Some(index) = selected {
                     self.navigate_to(index);
+                }
+            }
+        }
+
+        if self.texture.is_some() && self.info_panel.show {
+            if let Some(nav) = &self.navigation {
+                if let Some(path) = nav.current_path() {
+                    info_panel::show(ui, &self.exif_cache, path);
                 }
             }
         }
@@ -596,8 +816,9 @@ impl eframe::App for ShImagesApp {
             match &self.texture {
                 Some(texture) => {
                     let resp = viewer::show(ui, texture, &mut self.transform);
-                    if resp.zoomed || resp.panned {
+                    if resp.zoomed {
                         self.user_interacted = true;
+                        self.pause_slideshow();
                     }
                     // Auto-fit: al cargar (viewport recién conocido) y al
                     // redimensionar mientras el usuario no haya interactuado.

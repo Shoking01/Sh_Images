@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 use crate::core::shortcuts::ShortcutMap;
 use crate::utils::errors::{Result, ShImagesError};
 
+/// Valor por defecto del intervalo del slideshow (5 s).
+fn default_slideshow_interval_secs() -> u64 {
+    5
+}
+
 /// Preferencias persistentes de la aplicación.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
@@ -21,6 +26,9 @@ pub struct Settings {
     /// Atajos de teclado configurables (default: los de `ShortcutMap::defaults`).
     #[serde(default)]
     pub shortcuts: ShortcutMap,
+    /// Intervalo del slideshow en segundos (default: 5).
+    #[serde(default = "default_slideshow_interval_secs")]
+    pub slideshow_interval_secs: u64,
 }
 
 impl Default for Settings {
@@ -29,6 +37,7 @@ impl Default for Settings {
             cache_memory_limit_mb: 512,
             theme: "dark".to_string(),
             shortcuts: ShortcutMap::defaults(),
+            slideshow_interval_secs: 5,
         }
     }
 }
@@ -76,6 +85,7 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.cache_memory_limit_mb, 512);
         assert_eq!(s.theme, "dark");
+        assert_eq!(s.slideshow_interval_secs, 5);
     }
 
     #[test]
@@ -90,6 +100,7 @@ mod tests {
         let on_disk = fs::read_to_string(&path).unwrap();
         assert!(on_disk.contains("cache_memory_limit_mb = 512"));
         assert!(on_disk.contains("theme = \"dark\""));
+        assert!(on_disk.contains("slideshow_interval_secs = 5"));
     }
 
     #[test]
@@ -128,6 +139,7 @@ mod tests {
             cache_memory_limit_mb: 256,
             theme: "light".to_string(),
             shortcuts: ShortcutMap::defaults(),
+            slideshow_interval_secs: 5,
         };
 
         settings.save(&path).unwrap();
@@ -157,11 +169,40 @@ mod tests {
             cache_memory_limit_mb: 128,
             theme: "dark".to_string(),
             shortcuts: ShortcutMap::defaults(),
+            slideshow_interval_secs: 5,
         };
 
         second.save(&path).unwrap();
         let loaded = Settings::load(&path).unwrap();
 
         assert_eq!(loaded, second);
+    }
+
+    #[test]
+    fn slideshow_interval_defaults_to_five() {
+        let s = Settings::default();
+        assert_eq!(s.slideshow_interval_secs, 5);
+    }
+
+    #[test]
+    fn toml_without_new_field_migrates_to_default() {
+        let content = "cache_memory_limit_mb = 256\ntheme = \"light\"\n";
+        let s: Settings = toml::from_str(content).expect("deserializar");
+        assert_eq!(s.slideshow_interval_secs, 5);
+    }
+
+    #[test]
+    fn slideshow_interval_roundtrips() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let settings = Settings {
+            cache_memory_limit_mb: 256,
+            theme: "light".to_string(),
+            shortcuts: ShortcutMap::defaults(),
+            slideshow_interval_secs: 10,
+        };
+        settings.save(&path).unwrap();
+        let loaded = Settings::load(&path).unwrap();
+        assert_eq!(loaded, settings);
     }
 }

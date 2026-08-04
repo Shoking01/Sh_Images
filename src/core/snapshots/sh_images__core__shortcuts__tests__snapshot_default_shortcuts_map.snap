@@ -38,6 +38,22 @@ modifiers = "ctrl"
 key = "key_h"
 modifiers = "none"
 
+[bindings.toggle_info]
+key = "key_i"
+modifiers = "none"
+
+[bindings.toggle_slideshow]
+key = "key_f5"
+modifiers = "none"
+
+[bindings.slideshow_faster]
+key = "comma"
+modifiers = "none"
+
+[bindings.slideshow_slower]
+key = "period"
+modifiers = "none"
+
 [bindings.edit_shortcuts]
 key = "key_k"
 modifiers = "ctrl"

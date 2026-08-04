@@ -12,12 +12,16 @@ pub enum KeyCode {
     ArrowRight,
     KeyF,
     KeyH,
+    KeyI,
     KeyK,
     KeyO,
     KeyT,
     OpenBracket,
     CloseBracket,
     F11,
+    KeyF5,
+    Comma,
+    Period,
 }
 
 /// Modificadores de un atajo.
@@ -130,12 +134,16 @@ impl KeyCode {
             KeyCode::ArrowRight => "→",
             KeyCode::KeyF => "F",
             KeyCode::KeyH => "H",
+            KeyCode::KeyI => "I",
             KeyCode::KeyK => "K",
             KeyCode::KeyO => "O",
             KeyCode::KeyT => "T",
             KeyCode::OpenBracket => "[",
             KeyCode::CloseBracket => "]",
             KeyCode::F11 => "F11",
+            KeyCode::KeyF5 => "F5",
+            KeyCode::Comma => ",",
+            KeyCode::Period => ".",
         }
     }
 
@@ -146,12 +154,16 @@ impl KeyCode {
             "→" => Some(KeyCode::ArrowRight),
             "F" => Some(KeyCode::KeyF),
             "H" => Some(KeyCode::KeyH),
+            "I" => Some(KeyCode::KeyI),
             "K" => Some(KeyCode::KeyK),
             "O" => Some(KeyCode::KeyO),
             "T" => Some(KeyCode::KeyT),
             "[" => Some(KeyCode::OpenBracket),
             "]" => Some(KeyCode::CloseBracket),
             "F11" => Some(KeyCode::F11),
+            "F5" => Some(KeyCode::KeyF5),
+            "," => Some(KeyCode::Comma),
+            "." => Some(KeyCode::Period),
             _ => None,
         }
     }
@@ -198,7 +210,7 @@ mod tests {
     #[test]
     fn defaults_has_one_entry_per_action() {
         let map = ShortcutMap::defaults();
-        assert_eq!(map.iter().count(), 10);
+        assert_eq!(map.iter().count(), 14);
         for action in Action::all() {
             assert!(map.get(action).is_some(), "{action:?} sin binding default");
         }
@@ -216,6 +228,10 @@ mod tests {
         assert_eq!(map.get(Action::Fullscreen).unwrap().to_string(), "F11");
         assert_eq!(map.get(Action::ToggleTheme).unwrap().to_string(), "Ctrl+T");
         assert_eq!(map.get(Action::ToggleSidebar).unwrap().to_string(), "H");
+        assert_eq!(map.get(Action::ToggleInfo).unwrap().to_string(), "I");
+        assert_eq!(map.get(Action::ToggleSlideshow).unwrap().to_string(), "F5");
+        assert_eq!(map.get(Action::SlideshowFaster).unwrap().to_string(), ",");
+        assert_eq!(map.get(Action::SlideshowSlower).unwrap().to_string(), ".");
         assert_eq!(
             map.get(Action::EditShortcuts).unwrap().to_string(),
             "Ctrl+K"

@@ -11,6 +11,8 @@ use std::sync::{Mutex, MutexGuard};
 
 use image::DynamicImage;
 
+use crate::core::image_loader::LoadedImage;
+
 /// Límite de memoria por defecto en MiB (coincide con `Settings::default()`).
 pub const DEFAULT_MEMORY_LIMIT_MB: u64 = 512;
 
@@ -19,7 +21,7 @@ const NO_NODE: usize = usize::MAX;
 
 /// Entrada del cache: imagen decodificada + coste en bytes.
 struct CacheEntry {
-    image: DynamicImage,
+    image: LoadedImage,
     bytes: u64,
 }
 
@@ -125,8 +127,19 @@ impl CacheInner {
 
     /// Inserta una imagen; evicta en orden LRU hasta caber. All-or-nothing: si
     /// la imagen sola excede el límite, no cachea ni evicta nada.
-    fn insert(&mut self, path: PathBuf, image: DynamicImage) -> InsertResult {
-        let bytes = estimate_bytes(&image);
+    fn insert(&mut self, path: PathBuf, image: LoadedImage) -> InsertResult {
+        // Una imagen animada sin frames tendría coste 0 y un `get` posterior
+        // paniccía en `first_frame()`/`dimensions()` (AGENTS.md §2.1: nada de
+        // panics en producción, validar precondiciones en APIs públicas).
+        // No la cacheamos: no panicar y no asignar.
+        if matches!(&image, LoadedImage::Animated(anim) if anim.frames.is_empty()) {
+            return InsertResult {
+                cached: false,
+                evicted_keys: Vec::new(),
+            };
+        }
+
+        let bytes = estimate_loaded_bytes(&image);
 
         if bytes > self.limit_bytes() {
             return InsertResult {
@@ -247,16 +260,23 @@ impl ImageCache {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Inserta una imagen decodificada; evicta en orden LRU hasta caber.
+    /// Inserta una `LoadedImage` decodificada; evicta en orden LRU hasta caber.
     ///
     /// All-or-nothing: si la imagen sola excede el límite, no cachea ni evicta.
-    pub fn insert(&self, path: PathBuf, image: DynamicImage) -> InsertResult {
+    pub fn insert_loaded(&self, path: PathBuf, image: LoadedImage) -> InsertResult {
         self.lock().insert(path, image)
+    }
+
+    /// Inserta una imagen estática decodificada (shim de `insert_loaded`).
+    ///
+    /// Conveniencia para callers que solo manejan `DynamicImage`.
+    pub fn insert(&self, path: PathBuf, image: DynamicImage) -> InsertResult {
+        self.insert_loaded(path, LoadedImage::Static(image))
     }
 
     /// Devuelve la imagen cacheada (la marca como recién usada), o `None`.
     ///
-    /// El `CacheEntryRef` mantiene el lock; se usa como `&DynamicImage` vía `Deref`.
+    /// El `CacheEntryRef` mantiene el lock; se usa como `&LoadedImage` vía `Deref`.
     pub fn get(&self, path: &Path) -> Option<CacheEntryRef<'_>> {
         let mut inner = self.lock();
         let index = inner.get_index(path)?;
@@ -316,15 +336,15 @@ pub struct InsertResult {
 
 /// Acceso a una entrada cacheada; mantiene el `MutexGuard` vivo.
 ///
-/// El caller lo usa como `&DynamicImage` vía `Deref` (sin clonar pixels).
+/// El caller lo usa como `&LoadedImage` vía `Deref` (sin clonar pixels).
 pub struct CacheEntryRef<'a> {
     guard: MutexGuard<'a, CacheInner>,
     index: usize,
 }
 
 impl Deref for CacheEntryRef<'_> {
-    type Target = DynamicImage;
-    fn deref(&self) -> &DynamicImage {
+    type Target = LoadedImage;
+    fn deref(&self) -> &LoadedImage {
         &self.guard.nodes[self.index].value.image
     }
 }
@@ -336,10 +356,22 @@ fn estimate_bytes(image: &DynamicImage) -> u64 {
     w.saturating_mul(h).saturating_mul(bpp)
 }
 
+/// Coste en bytes de un `LoadedImage`: la suma de todos sus frames si es
+/// animado.
+fn estimate_loaded_bytes(image: &LoadedImage) -> u64 {
+    match image {
+        LoadedImage::Static(img) => estimate_bytes(img),
+        LoadedImage::Animated(anim) => anim.frames.iter().map(|f| estimate_bytes(&f.image)).sum(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{GenericImageView, RgbaImage};
+    use image::RgbaImage;
+    use std::time::Duration;
+
+    use crate::core::image_loader::{AnimatedFrame, AnimatedImage, LoadedImage};
 
     const MIB: u64 = 1024 * 1024;
 
@@ -579,5 +611,93 @@ mod tests {
         assert!(cache.contains(Path::new("a.png")));
         assert!(cache.contains(Path::new("a.png")));
         assert_eq!(cache.hit_ratio(), 0.0);
+    }
+
+    fn animated() -> LoadedImage {
+        LoadedImage::Animated(AnimatedImage {
+            frames: vec![
+                AnimatedFrame {
+                    image: rgba(16, 16),
+                    delay: Duration::from_millis(100),
+                },
+                AnimatedFrame {
+                    image: rgba(16, 16),
+                    delay: Duration::from_millis(200),
+                },
+            ],
+            total_duration: Duration::from_millis(300),
+        })
+    }
+
+    #[test]
+    fn insert_animated_counts_sum_of_frames() {
+        let cache = ImageCache::new(4);
+        let res = cache.insert_loaded(PathBuf::from("anim.gif"), animated());
+        assert!(res.cached);
+        assert_eq!(cache.memory_used(), 2 * 16 * 16 * 4);
+    }
+
+    #[test]
+    fn animated_entry_is_readable_and_flagged() {
+        let cache = ImageCache::new(4);
+        cache.insert_loaded(PathBuf::from("anim.gif"), animated());
+        let entry = cache
+            .get(Path::new("anim.gif"))
+            .expect("debería estar cacheada");
+        assert!(entry.is_animated());
+        assert_eq!(entry.dimensions(), (16, 16));
+    }
+
+    #[test]
+    fn inserting_empty_animated_image_is_not_cached() {
+        let cache = ImageCache::new(4);
+        let empty = LoadedImage::Animated(AnimatedImage {
+            frames: Vec::new(),
+            total_duration: Duration::ZERO,
+        });
+
+        let res = cache.insert_loaded(PathBuf::from("empty.gif"), empty);
+        assert!(!res.cached);
+        assert!(res.evicted_keys.is_empty());
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.memory_used(), 0);
+        assert!(cache.get(Path::new("empty.gif")).is_none());
+        assert!(!cache.contains(Path::new("empty.gif")));
+    }
+
+    #[test]
+    fn animated_lru_eviction_respects_summed_size() {
+        // Límite 1 MiB: caben dos imágenes animadas de 2 frames (512 KiB cada
+        // una). Una tercera del mismo tamaño fuerza la evicción de la más LRU.
+        let cache = ImageCache::new(1);
+        let res = cache.insert_loaded(PathBuf::from("a.gif"), animated_big());
+        assert!(res.cached);
+        let res2 = cache.insert_loaded(PathBuf::from("b.gif"), animated_big());
+        assert!(res2.cached);
+        assert_eq!(cache.len(), 2);
+        // Una tercera animada del mismo tamaño fuerza evicción de `a.gif`.
+        let res3 = cache.insert_loaded(PathBuf::from("c.gif"), animated_big());
+        assert!(res3.cached);
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get(Path::new("a.gif")).is_none());
+        assert!(cache.get(Path::new("b.gif")).is_some());
+        assert!(cache.get(Path::new("c.gif")).is_some());
+    }
+
+    fn animated_big() -> LoadedImage {
+        // 2 frames de 256x256 RGBA = 2 * 262144 B = 512 KiB.
+        LoadedImage::Animated(AnimatedImage {
+            frames: vec![
+                AnimatedFrame {
+                    image: rgba(256, 256),
+                    delay: Duration::from_millis(100),
+                },
+                AnimatedFrame {
+                    image: rgba(256, 256),
+                    delay: Duration::from_millis(100),
+                },
+            ],
+            total_duration: Duration::from_millis(200),
+        })
     }
 }

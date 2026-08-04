@@ -43,6 +43,9 @@ egui = "0.35"
 rfd = "0.15"
 # Decodificación de imágenes — justificación: benchmark base y Fase 1.
 image = "0.25"
+# Metadatos EXIF (JPEG/TIFF) — licencia BSD-2-Clause (AGENTS.md §7.2),
+# estándar del ecosistema, recomendado por Plan.md §6.
+kamadak-exif = "0.6.1"
 # Serialización de configuración TOML.
 serde = { version = "1", features = ["derive"] }
 toml = "1"

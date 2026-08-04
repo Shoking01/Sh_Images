@@ -119,11 +119,11 @@ sh_images/
 - [x] **Tests de UI**: snapshot testing con `insta` para verificar que el UI no regresa
 
 ### Fase 4 — Metadatos Avanzados (Semana 5)
-- [ ] Lectura de metadatos EXIF
-- [ ] Panel lateral con info EXIF (cámara, ISO, apertura, fecha)
-- [ ] Soporte para GIF animado
-- [ ] Slideshow automático
-- [ ] **Tests**: extracción EXIF de múltiples formatos, manejo de archivos corruptos
+- [x] Lectura de metadatos EXIF
+- [x] Panel lateral con info EXIF (cámara, ISO, apertura, fecha)
+- [x] Soporte para GIF animado
+- [x] Slideshow automático
+- [x] **Tests**: extracción EXIF de múltiples formatos, manejo de archivos corruptos
 
 ### Fase 5 — Packaging y Distribución (Semana 6)
 - [ ] Icono de aplicación por plataforma

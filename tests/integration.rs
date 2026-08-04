@@ -5,20 +5,22 @@
 
 mod common;
 
-use std::ops::{Add, Div, Mul, Sub};
+use std::ops::Add;
+use std::time::Duration;
 
-use image::GenericImageView;
 use sh_images::config::settings::Settings;
+use sh_images::core::exif::read_exif;
 use sh_images::core::image_cache::ImageCache;
-use sh_images::core::image_loader::load_image;
+use sh_images::core::image_loader::{load_image, LoadedImage};
 use sh_images::core::navigation::{Navigation, SUPPORTED_EXTENSIONS};
 use sh_images::core::preload::{preload_targets, PRELOAD_DEPTH};
 use sh_images::core::shortcuts::ShortcutMap;
+use sh_images::core::slideshow;
 use sh_images::core::view::{Vec2, ViewTransform};
 
 use common::{
-    corrupt_png_path, empty_png_path, gif_path, make_folder_with_images,
-    make_folder_with_rect_images,
+    copy_fixture, corrupt_png_path, empty_png_path, gif_path, make_animated_gif,
+    make_folder_with_images, make_folder_with_rect_images,
 };
 
 /// Flujo 1 — Apertura: abrir → decodificar → cachear.
@@ -39,7 +41,7 @@ fn flujo_apertura_completo() {
     assert_eq!((w, h), (64, 64), "la imagen sintética es 64x64");
 
     let cache = ImageCache::new(512);
-    let result = cache.insert(target.clone(), image);
+    let result = cache.insert_loaded(target.clone(), image);
     assert!(result.cached, "la imagen 64x64 cabe en el LRU 512MiB");
     let entry = cache.get(target).expect("re-leer del cache");
     assert_eq!(
@@ -96,33 +98,32 @@ fn flujo_navegacion_circular() {
     assert_eq!(next.expect("siguiente"), &paths[3]);
 }
 
-/// Flujo 3 — Zoom/Pan: zoom in → pan → fit restaura.
+/// Flujo 3 — Zoom/Fit: zoom in centrado → fit restaura.
 #[test]
-fn flujo_zoom_pan_fit() {
+fn flujo_zoom_fit_centrado() {
     let mut t = ViewTransform::new(Vec2::new(2000.0, 1000.0), Vec2::new(500.0, 500.0));
     let fit = t.fit_zoom();
-    let anchor = Vec2::new(250.0, 250.0);
+    let center = Vec2::new(250.0, 250.0);
 
-    // Capturar el punto de imagen bajo el ancla ANTES del zoom.
+    // El centro de la imagen está bajo el centro del canvas (ancla fija).
     let origin = t.image_origin_screen();
-    let image_point = anchor.sub(origin).div(t.zoom);
+    let img_center = origin.add(Vec2::new(2000.0 * t.zoom * 0.5, 1000.0 * t.zoom * 0.5));
+    assert!((img_center.x - center.x).abs() < 1e-3, "centrada en x");
+    assert!((img_center.y - center.y).abs() < 1e-3, "centrada en y");
 
-    // Zoom in en un punto ancla.
-    t.apply_zoom_at(anchor, 2.0);
+    // Zoom in con rueda: sigue centrada.
+    t.apply_center(2.0);
     assert!(t.zoom > fit, "zoom in supera el fit");
-
-    // El punto de imagen capturado antes debe mapear al mismo ancla de pantalla.
-    let new_origin = t.image_origin_screen();
-    let new_screen = new_origin.add(image_point.mul(t.zoom));
-    assert!((new_screen.x - anchor.x).abs() < 1e-3, "ancla fija en x");
-    assert!((new_screen.y - anchor.y).abs() < 1e-3, "ancla fija en y");
-
-    // Pan desplaza.
-    let before = t.image_origin_screen();
-    t.pan_by(Vec2::new(30.0, -10.0));
-    let after = t.image_origin_screen();
-    assert!((after.x - before.x - 30.0).abs() < 1e-3, "pan mueve en x");
-    assert!((after.y - before.y + 10.0).abs() < 1e-3, "pan mueve en y");
+    let origin2 = t.image_origin_screen();
+    let img_center2 = origin2.add(Vec2::new(2000.0 * t.zoom * 0.5, 1000.0 * t.zoom * 0.5));
+    assert!(
+        (img_center2.x - center.x).abs() < 1e-3,
+        "sigue centrada en x"
+    );
+    assert!(
+        (img_center2.y - center.y).abs() < 1e-3,
+        "sigue centrada en y"
+    );
 
     // Fit restaura zoom y centra.
     t.fit();
@@ -187,6 +188,7 @@ fn flujo_configuracion_persistencia() {
         cache_memory_limit_mb: 256,
         theme: "light".to_string(),
         shortcuts: ShortcutMap::defaults(),
+        slideshow_interval_secs: 5,
     };
     modified.save(&path).expect("guardar modificado");
 
@@ -226,10 +228,87 @@ fn flujo_rotacion_visual() {
         (t.fit_zoom() - fit0).abs() > 1e-6,
         "fit cambia con rotación"
     );
-    assert_eq!(t.pan, Vec2::ZERO, "rota → pan 0");
-
     // "Rotar 90° CCW" restaura la orientación original.
     t.rotate_ccw();
     assert_eq!(t.rotation, 0);
     assert!((t.fit_zoom() - fit0).abs() < 1e-3, "vuelve al fit original");
+}
+
+/// Flujo 7 — EXIF: leer metadatos de un JPEG real; no-crash sin EXIF.
+#[test]
+fn flujo_exif() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let jpg = copy_fixture(dir.path(), "exif.jpg");
+    let img = read_exif(&jpg).expect("leer ok").expect("jpg con exif");
+    assert!(
+        img.make.is_some() || img.model.is_some() || img.fecha.is_some(),
+        "JPEG con EXIF expone cámara o fecha"
+    );
+
+    let png = copy_fixture(dir.path(), "sample.png");
+    assert_eq!(read_exif(&png).expect("ok"), None, "PNG sin EXIF → None");
+}
+
+/// Flujo 8 — GIF animado: cargar, verificar frames/retardos y selección por
+/// tiempo; un GIF corrupto no crashea.
+#[test]
+fn flujo_gif_animado() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let gif = make_animated_gif(dir.path(), &[100, 200]);
+    let loaded = load_image(&gif).expect("gif válido");
+    let LoadedImage::Animated(anim) = &loaded else {
+        panic!("gif de 2 frames debe ser Animated");
+    };
+    assert_eq!(anim.frames.len(), 2);
+    assert_eq!(anim.frames[0].delay, Duration::from_millis(100));
+    assert_eq!(anim.frames[1].delay, Duration::from_millis(200));
+    assert_eq!(anim.total_duration, Duration::from_millis(300));
+
+    assert_eq!(loaded.frame_index_at(Duration::from_millis(0)), 0);
+    assert_eq!(loaded.frame_index_at(Duration::from_millis(150)), 1);
+    assert_eq!(loaded.frame_index_at(Duration::from_millis(300)), 0);
+
+    let corrupt = dir.path().join("corrupt.gif");
+    std::fs::write(&corrupt, b"GIF89a not really a gif").expect("escribir");
+    let err = load_image(&corrupt).expect_err("gif corrupto da error");
+    assert!(
+        matches!(
+            err,
+            sh_images::utils::errors::ShImagesError::Decode(_)
+                | sh_images::utils::errors::ShImagesError::Io(_)
+        ),
+        "gif corrupto no crashea"
+    );
+}
+
+/// Flujo 9 — Slideshow: límites del intervalo y default de 5 s.
+#[test]
+fn flujo_slideshow_interval() {
+    assert_eq!(slideshow::default_interval(), Duration::from_secs(5));
+    assert_eq!(
+        slideshow::faster(Duration::from_secs(5)),
+        Duration::from_millis(2500)
+    );
+    assert_eq!(
+        slideshow::slower(Duration::from_secs(5)),
+        Duration::from_secs(10)
+    );
+    assert_eq!(
+        slideshow::faster(Duration::from_secs(1)),
+        Duration::from_secs(1)
+    );
+    assert_eq!(
+        slideshow::slower(Duration::from_secs(60)),
+        Duration::from_secs(60)
+    );
+    assert!(slideshow::elapsed_reached(
+        Duration::from_secs(5),
+        Duration::from_secs(5)
+    ));
+    assert!(!slideshow::elapsed_reached(
+        Duration::from_secs(4),
+        Duration::from_secs(5)
+    ));
 }

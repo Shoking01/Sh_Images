@@ -114,12 +114,16 @@ pub fn keybinding_from_egui(key: egui::Key, modifiers: egui::Modifiers) -> Optio
         egui::Key::ArrowRight => KeyCode::ArrowRight,
         egui::Key::F => KeyCode::KeyF,
         egui::Key::H => KeyCode::KeyH,
+        egui::Key::I => KeyCode::KeyI,
         egui::Key::K => KeyCode::KeyK,
         egui::Key::O => KeyCode::KeyO,
         egui::Key::T => KeyCode::KeyT,
         egui::Key::OpenBracket => KeyCode::OpenBracket,
         egui::Key::CloseBracket => KeyCode::CloseBracket,
         egui::Key::F11 => KeyCode::F11,
+        egui::Key::F5 => KeyCode::KeyF5,
+        egui::Key::Comma => KeyCode::Comma,
+        egui::Key::Period => KeyCode::Period,
         _ => return None,
     };
     let mods = if modifiers.ctrl {
