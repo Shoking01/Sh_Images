@@ -7,6 +7,13 @@ rust-version = "1.92"
 # build.rs genera assets/icon.ico desde assets/icon.svg.
 build = "build.rs"
 
+# Release profile optimizado para tamaño (AGENTS.md §6.1: binario <20MB).
+# strip elimina symbols, lto=true + codegen-units=1 permiten cross-module opts.
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
+
 [lib]
 name = "sh_images"
 path = "src/lib.rs"
@@ -37,6 +44,7 @@ harness = false
 
 [dependencies]
 # GUI — eframe/egui: framework immediate-mode nativo, fijado por Plan.md.
+# NOTA: el backend por defecto (wgpu) produce un binario >20MB. Ver ADR-001.
 eframe = "0.35"
 egui = "0.35"
 # Diálogo de archivos nativo (abrir imágenes) — justificación: estándar en el

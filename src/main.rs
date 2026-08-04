@@ -1,4 +1,9 @@
 //! Punto de entrada: inicialización de logging y arranque de `eframe`.
+//!
+//! En Windows, `windows_subsystem = "windows"` elimina la consola del .exe
+//! para que el visor no muestre una ventana de terminal (Fase 5).
+
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::path::PathBuf;
 

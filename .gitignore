@@ -4,3 +4,5 @@ Cargo.lock.orig
 *.swp
 .DS_Store
 /.superpowers/
+# Icono generado por build.rs (build-time artifact, no commitear)
+installer/windows/icon.ico
