@@ -128,6 +128,17 @@ impl CacheInner {
     /// Inserta una imagen; evicta en orden LRU hasta caber. All-or-nothing: si
     /// la imagen sola excede el límite, no cachea ni evicta nada.
     fn insert(&mut self, path: PathBuf, image: LoadedImage) -> InsertResult {
+        // Una imagen animada sin frames tendría coste 0 y un `get` posterior
+        // paniccía en `first_frame()`/`dimensions()` (AGENTS.md §2.1: nada de
+        // panics en producción, validar precondiciones en APIs públicas).
+        // No la cacheamos: no panicar y no asignar.
+        if matches!(&image, LoadedImage::Animated(anim) if anim.frames.is_empty()) {
+            return InsertResult {
+                cached: false,
+                evicted_keys: Vec::new(),
+            };
+        }
+
         let bytes = estimate_loaded_bytes(&image);
 
         if bytes > self.limit_bytes() {
@@ -635,6 +646,23 @@ mod tests {
             .expect("debería estar cacheada");
         assert!(entry.is_animated());
         assert_eq!(entry.dimensions(), (16, 16));
+    }
+
+    #[test]
+    fn inserting_empty_animated_image_is_not_cached() {
+        let cache = ImageCache::new(4);
+        let empty = LoadedImage::Animated(AnimatedImage {
+            frames: Vec::new(),
+            total_duration: Duration::ZERO,
+        });
+
+        let res = cache.insert_loaded(PathBuf::from("empty.gif"), empty);
+        assert!(!res.cached);
+        assert!(res.evicted_keys.is_empty());
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.memory_used(), 0);
+        assert!(cache.get(Path::new("empty.gif")).is_none());
+        assert!(!cache.contains(Path::new("empty.gif")));
     }
 
     #[test]
