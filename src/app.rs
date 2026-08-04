@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::core::exif::{read_exif, ExifRead};
 
@@ -18,6 +18,7 @@ use crate::core::image_loader::load_image;
 use crate::core::navigation::{Navigation, SUPPORTED_EXTENSIONS};
 use crate::core::preload::{preload_targets, PRELOAD_DEPTH};
 use crate::core::shortcuts::ShortcutMap;
+use crate::core::slideshow;
 use crate::core::thumb_queue::ThumbQueue;
 use crate::core::thumbnail_cache::ThumbnailCache;
 use crate::core::thumbnail_gen::{generate_thumbnail, THUMB_MAX};
@@ -107,6 +108,12 @@ pub struct ShImagesApp {
     info_panel: InfoPanelState,
     /// Estado de reproducción de la animación del GIF actual.
     anim: Option<AnimState>,
+    /// Si el slideshow automático está activo.
+    slideshow_active: bool,
+    /// Intervalo actual del slideshow.
+    slideshow_interval: Duration,
+    /// Última vez que el slideshow avanzó de imagen.
+    slideshow_last_advance: Instant,
 }
 
 impl ShImagesApp {
@@ -161,6 +168,7 @@ impl ShImagesApp {
         let (exif_tx, exif_rx) = mpsc::channel::<PathBuf>();
         let (exif_events_tx, exif_events_rx) = mpsc::channel::<()>();
         let exif_cache = Arc::new(Mutex::new(HashMap::new()));
+        let slideshow_interval = Duration::from_secs(settings.slideshow_interval_secs.max(1));
         {
             let cache = exif_cache.clone();
             let events_tx = exif_events_tx.clone();
@@ -210,6 +218,9 @@ impl ShImagesApp {
             exif_rx: Some(exif_events_rx),
             info_panel: InfoPanelState::default(),
             anim: None,
+            slideshow_active: false,
+            slideshow_interval,
+            slideshow_last_advance: Instant::now(),
         }
     }
 
@@ -496,6 +507,7 @@ impl ShImagesApp {
 
     /// Salta a la imagen `index` de la carpeta (click en una miniatura).
     fn navigate_to(&mut self, index: usize) {
+        self.pause_slideshow();
         let Some(nav) = &mut self.navigation else {
             return;
         };
@@ -511,6 +523,53 @@ impl ShImagesApp {
     /// Alterna la visibilidad del sidebar.
     fn toggle_sidebar(&mut self) {
         self.sidebar.show = !self.sidebar.show;
+    }
+
+    /// Alterna el slideshow y reinicia su contador.
+    fn toggle_slideshow(&mut self) {
+        self.slideshow_active = !self.slideshow_active;
+        self.slideshow_last_advance = Instant::now();
+        self.ctx.request_repaint();
+        tracing::info!(active = self.slideshow_active, "slideshow toggled");
+    }
+
+    /// Ajusta la velocidad del slideshow y persiste el intervalo.
+    fn change_slideshow_speed(&mut self, faster: bool) {
+        self.slideshow_interval = if faster {
+            slideshow::faster(self.slideshow_interval)
+        } else {
+            slideshow::slower(self.slideshow_interval)
+        };
+        self.settings.slideshow_interval_secs = self.slideshow_interval.as_secs().max(1);
+        if let Ok(path) = settings_path() {
+            if let Err(e) = self.settings.save(&path) {
+                tracing::warn!(error = %e, "failed to persist slideshow interval");
+            }
+        }
+        self.slideshow_last_advance = Instant::now();
+        tracing::info!(
+            interval_secs = self.settings.slideshow_interval_secs,
+            "slideshow speed changed"
+        );
+    }
+
+    /// Avanza una imagen sin pausar el slideshow (auto-avance).
+    fn advance_slideshow(&mut self) {
+        self.slideshow_last_advance = Instant::now();
+        if let Some(nav) = &mut self.navigation {
+            nav.next();
+            if let Some(path) = nav.current_path().cloned() {
+                self.start_load(path);
+            }
+        }
+    }
+
+    /// Detiene el slideshow por interacción manual del usuario.
+    fn pause_slideshow(&mut self) {
+        if self.slideshow_active {
+            self.slideshow_active = false;
+            tracing::info!("slideshow paused by user interaction");
+        }
     }
 
     /// Dispara la pre-carga de N±1 usando `preload_targets`.
@@ -577,8 +636,14 @@ impl ShImagesApp {
     fn dispatch(&mut self, action: Action) {
         match action {
             Action::Open => self.open_dialog(),
-            Action::Prev => self.navigate(-1),
-            Action::Next => self.navigate(1),
+            Action::Prev => {
+                self.pause_slideshow();
+                self.navigate(-1);
+            }
+            Action::Next => {
+                self.pause_slideshow();
+                self.navigate(1);
+            }
             Action::RotateCw => self.rotate_image(true),
             Action::RotateCcw => self.rotate_image(false),
             Action::Fit => {
@@ -591,9 +656,9 @@ impl ShImagesApp {
             Action::ToggleTheme => self.toggle_theme(),
             Action::ToggleSidebar => self.toggle_sidebar(),
             Action::ToggleInfo => self.info_panel.show = !self.info_panel.show,
-            Action::ToggleSlideshow => {}
-            Action::SlideshowFaster => {}
-            Action::SlideshowSlower => {}
+            Action::ToggleSlideshow => self.toggle_slideshow(),
+            Action::SlideshowFaster => self.change_slideshow_speed(true),
+            Action::SlideshowSlower => self.change_slideshow_speed(false),
             Action::EditShortcuts => self.shortcut_dialog.open = true,
         }
     }
@@ -672,13 +737,23 @@ impl eframe::App for ShImagesApp {
         self.poll_exif();
         self.tick_animation();
 
+        if self.slideshow_active && self.navigation.is_some() {
+            if slideshow::elapsed_reached(
+                self.slideshow_last_advance.elapsed(),
+                self.slideshow_interval,
+            ) {
+                self.advance_slideshow();
+            }
+            self.ctx.request_repaint_after(self.slideshow_interval);
+        }
+
         // Toolbar superior (acciones de la app).
         let action = toolbar::show(
             ui,
             &self.shortcuts,
             &self.settings.theme,
             self.is_fullscreen,
-            false,
+            self.slideshow_active,
         );
         if let Some(action) = action {
             self.dispatch(action);
@@ -743,6 +818,7 @@ impl eframe::App for ShImagesApp {
                     let resp = viewer::show(ui, texture, &mut self.transform);
                     if resp.zoomed {
                         self.user_interacted = true;
+                        self.pause_slideshow();
                     }
                     // Auto-fit: al cargar (viewport recién conocido) y al
                     // redimensionar mientras el usuario no haya interactuado.
