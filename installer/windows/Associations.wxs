@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <!--
+    Associations.wxs — registra asociaciones de archivos.
+    Extensiones (Fase 5, alcance "seguro"):
+      .png  .jpg  .jpeg  .bmp  .gif  .webp  .tiff
+    NO incluye formatos donde Windows Photos es dominante
+    (HEIC, RAW, AVIF) — pueden añadirse en Fases futuras.
+
+    Patrón WiX 3: ProgId + Extension + Verb (Target apunta al File Id).
+  -->
+  <Fragment>
+    <Component Id="FileAssociations" Guid="D4E6F8A0-B1C2-4D3E-9F8E-0A1B2C3D4E5F">
+      <!-- PNG -->
+      <ProgId Id="ShImages.PNG" Description="Imagen PNG (Sh_Images)" />
+      <Extension Id="png" ContentType="image/png">
+        <Verb Id="open" Command="open" Target="[ShImagesExe]" Arguments="&quot;%1&quot;" />
+        <ProgId>ShImages.PNG</ProgId>
+      </Extension>
+
+      <!-- JPEG -->
+      <ProgId Id="ShImages.JPEG" Description="Imagen JPEG (Sh_Images)" />
+      <Extension Id="jpg" ContentType="image/jpeg">
+        <Verb Id="open" Command="open" Target="[ShImagesExe]" Arguments="&quot;%1&quot;" />
+        <ProgId>ShImages.JPEG</ProgId>
+      </Extension>
+      <Extension Id="jpeg" ContentType="image/jpeg">
+        <Verb Id="open" Command="open" Target="[ShImagesExe]" Arguments="&quot;%1&quot;" />
+        <ProgId>ShImages.JPEG</ProgId>
+      </Extension>
+
+      <!-- BMP -->
+      <ProgId Id="ShImages.BMP" Description="Imagen BMP (Sh_Images)" />
+      <Extension Id="bmp" ContentType="image/bmp">
+        <Verb Id="open" Command="open" Target="[ShImagesExe]" Arguments="&quot;%1&quot;" />
+        <ProgId>ShImages.BMP</ProgId>
+      </Extension>
+
+      <!-- GIF -->
+      <ProgId Id="ShImages.GIF" Description="Imagen GIF (Sh_Images)" />
+      <Extension Id="gif" ContentType="image/gif">
+        <Verb Id="open" Command="open" Target="[ShImagesExe]" Arguments="&quot;%1&quot;" />
+        <ProgId>ShImages.GIF</ProgId>
+      </Extension>
+
+      <!-- WebP -->
+      <ProgId Id="ShImages.WebP" Description="Imagen WebP (Sh_Images)" />
+      <Extension Id="webp" ContentType="image/webp">
+        <Verb Id="open" Command="open" Target="[ShImagesExe]" Arguments="&quot;%1&quot;" />
+        <ProgId>ShImages.WebP</ProgId>
+      </Extension>
+
+      <!-- TIFF -->
+      <ProgId Id="ShImages.TIFF" Description="Imagen TIFF (Sh_Images)" />
+      <Extension Id="tiff" ContentType="image/tiff">
+        <Verb Id="open" Command="open" Target="[ShImagesExe]" Arguments="&quot;%1&quot;" />
+        <ProgId>ShImages.TIFF</ProgId>
+      </Extension>
+    </Component>
+  </Fragment>
+</Wix>
