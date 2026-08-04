@@ -5,16 +5,16 @@
 //! empaquetado en `.ico` multi-imagen → `OUT_DIR/icon.ico`.
 //! En Windows, `winres` incrusta el `.ico` como icono del exe.
 
-extern crate resvg;
 extern crate ico;
+extern crate resvg;
 
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::PathBuf;
 
 // resvg re-exporta usvg y tiny_skia.
-use resvg::usvg::{self, Tree as UsvgTree};
 use resvg::tiny_skia::{Pixmap, Transform};
+use resvg::usvg::{self, Tree as UsvgTree};
 
 /// Resoluciones del icono (en píxeles). La viewBox del SVG es 512×512.
 const ICON_SIZES: &[u32] = &[16, 32, 48, 64, 128, 256];
@@ -53,7 +53,10 @@ fn main() {
     let ico_bytes = encode_ico(&rgba_bufs);
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     fs::write(out_dir.join("icon.ico"), &ico_bytes).expect("failed to write icon.ico");
-    println!("cargo:warning=icon.ico generado ({} bytes)", ico_bytes.len());
+    println!(
+        "cargo:warning=icon.ico generado ({} bytes)",
+        ico_bytes.len()
+    );
 
     #[cfg(windows)]
     embed_icon(&ico_bytes);
@@ -66,8 +69,8 @@ fn encode_ico(rgba_bufs: &[(u32, Vec<u8>)]) -> Vec<u8> {
 
     // ICONDIR (6 bytes)
     buf.write_all(&0u16.to_le_bytes()).unwrap();
-    buf.write_all(&1u16.to_le_bytes()).unwrap();       // type = ICO
-    buf.write_all(&(n as u16).to_le_bytes()).unwrap();  // count
+    buf.write_all(&1u16.to_le_bytes()).unwrap(); // type = ICO
+    buf.write_all(&(n as u16).to_le_bytes()).unwrap(); // count
 
     // Pre-calcular offsets
     let header_size = 6 + (n * 16);
@@ -77,7 +80,7 @@ fn encode_ico(rgba_bufs: &[(u32, Vec<u8>)]) -> Vec<u8> {
     for &(w, ref rgba) in rgba_bufs {
         let h = w;
         let pixel_bytes = rgba.len();
-        let and_mask_bytes = ((w as usize + 31) / 32) * 4 * h as usize;
+        let and_mask_bytes = (w as usize).div_ceil(32) * 4 * h as usize;
         let image_size = 40 + pixel_bytes + and_mask_bytes;
         offsets.push(current_offset);
         current_offset += image_size as u32;
@@ -88,7 +91,7 @@ fn encode_ico(rgba_bufs: &[(u32, Vec<u8>)]) -> Vec<u8> {
         let h = w;
         let (_, rgba) = &rgba_bufs[i];
         let pixel_bytes = rgba.len();
-        let and_mask_bytes = ((w as usize + 31) / 32) * 4 * h as usize;
+        let and_mask_bytes = (w as usize).div_ceil(32) * 4 * h as usize;
         let image_size = 40 + pixel_bytes + and_mask_bytes;
 
         buf.write_all(&[w.min(256) as u8]).unwrap();
@@ -126,7 +129,7 @@ fn encode_ico(rgba_bufs: &[(u32, Vec<u8>)]) -> Vec<u8> {
         buf.write_all(&bgra).unwrap();
 
         // AND mask: 1bpp, todos 0 = opacos
-        let and_mask_len = ((w as usize + 31) / 32) * 4 * h as usize;
+        let and_mask_len = (w as usize).div_ceil(32) * 4 * h as usize;
         buf.write_all(&vec![0u8; and_mask_len]).unwrap();
     }
 

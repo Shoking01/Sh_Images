@@ -114,6 +114,8 @@ pub struct ShImagesApp {
     slideshow_interval: Duration,
     /// Última vez que el slideshow avanzó de imagen.
     slideshow_last_advance: Instant,
+    /// Path recibido por CLI al arranque; se abre en el primer frame.
+    pending_initial: Option<PathBuf>,
 }
 
 impl ShImagesApp {
@@ -121,7 +123,10 @@ impl ShImagesApp {
     ///
     /// Si la configuración no puede cargarse, se usan los defaults y se loguea
     /// un warning; la app nunca aborta el arranque por esto.
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    ///
+    /// `initial_path`: si proviene de CLI (`sh_images.exe <path>`), se abre
+    /// directamente en el primer frame; si `None`, el usuario abre vía diálogo.
+    pub fn new(cc: &eframe::CreationContext<'_>, initial_path: Option<PathBuf>) -> Self {
         let settings = match settings_path().and_then(|path| Settings::load(&path)) {
             Ok(settings) => settings,
             Err(e) => {
@@ -221,6 +226,7 @@ impl ShImagesApp {
             slideshow_active: false,
             slideshow_interval,
             slideshow_last_advance: Instant::now(),
+            pending_initial: initial_path,
         }
     }
 
@@ -731,6 +737,15 @@ impl eframe::App for ShImagesApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         theme::apply(ui.ctx(), &self.settings.theme);
         let t = ui.input(|i| i.time);
+
+        // Al arranque, abrir el path de CLI si lo hay (solo el primer frame
+        // en que navigation aún no está inicializada).
+        if self.navigation.is_none() {
+            if let Some(path) = self.pending_initial.take() {
+                tracing::info!(path = %path.display(), "opening CLI path");
+                self.open_path(path, t);
+            }
+        }
 
         self.poll_loader(t);
         self.poll_thumbnails();
