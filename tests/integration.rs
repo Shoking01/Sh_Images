@@ -9,6 +9,7 @@ use std::ops::Add;
 
 use image::GenericImageView;
 use sh_images::config::settings::Settings;
+use sh_images::core::exif::read_exif;
 use sh_images::core::image_cache::ImageCache;
 use sh_images::core::image_loader::load_image;
 use sh_images::core::navigation::{Navigation, SUPPORTED_EXTENSIONS};
@@ -17,7 +18,7 @@ use sh_images::core::shortcuts::ShortcutMap;
 use sh_images::core::view::{Vec2, ViewTransform};
 
 use common::{
-    corrupt_png_path, empty_png_path, gif_path, make_folder_with_images,
+    copy_fixture, corrupt_png_path, empty_png_path, gif_path, make_folder_with_images,
     make_folder_with_rect_images,
 };
 
@@ -229,4 +230,20 @@ fn flujo_rotacion_visual() {
     t.rotate_ccw();
     assert_eq!(t.rotation, 0);
     assert!((t.fit_zoom() - fit0).abs() < 1e-3, "vuelve al fit original");
+}
+
+/// Flujo 7 — EXIF: leer metadatos de un JPEG real; no-crash sin EXIF.
+#[test]
+fn flujo_exif() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let jpg = copy_fixture(dir.path(), "exif.jpg");
+    let img = read_exif(&jpg).expect("leer ok").expect("jpg con exif");
+    assert!(
+        img.make.is_some() || img.model.is_some() || img.fecha.is_some(),
+        "JPEG con EXIF expone cámara o fecha"
+    );
+
+    let png = copy_fixture(dir.path(), "sample.png");
+    assert_eq!(read_exif(&png).expect("ok"), None, "PNG sin EXIF → None");
 }

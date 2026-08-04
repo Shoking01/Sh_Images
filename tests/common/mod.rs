@@ -74,3 +74,14 @@ pub fn gif_path(dir: &Path) -> PathBuf {
         .expect("guardar gif");
     path
 }
+
+/// Copia un fixture committeado a un directorio temp y devuelve su ruta.
+pub fn copy_fixture(dir: &Path, name: &str) -> PathBuf {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(name);
+    let dst = dir.join(name);
+    fs::copy(&src, &dst).expect("copiar fixture");
+    dst
+}
