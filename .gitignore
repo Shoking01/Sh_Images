@@ -6,3 +6,6 @@ Cargo.lock.orig
 /.superpowers/
 # Icono generado por build.rs (build-time artifact, no commitear)
 installer/windows/icon.ico
+/AGENTS.md
+/Plan.md
+/docs/
