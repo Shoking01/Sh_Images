@@ -32,13 +32,13 @@ responsive desktop app.
 ### Supported Formats
 | Format | Status |
 |--------|--------|
-| PNG | |
-| JPEG | |
-| GIF (static + animated) | |
-| BMP | |
-| WebP | |
-| TIFF | |
-| AVIF | |
+| PNG | ✅ Supported |
+| JPEG | ✅ Supported |
+| GIF | ✅ Supported (static + animated) |
+| BMP | ✅ Supported |
+| WebP | ✅ Supported |
+| TIFF | ✅ Supported |
+| AVIF | ✅ Supported |
 
 ### Installation
 
