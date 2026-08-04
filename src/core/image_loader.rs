@@ -5,7 +5,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use image::codecs::gif::GifDecoder;
-use image::{AnimationDecoder, DynamicImage, GenericImageView, ImageFormat, ImageReader};
+use image::{
+    AnimationDecoder, DynamicImage, GenericImageView, ImageDecoder, ImageFormat, ImageReader,
+    Limits,
+};
 
 use crate::utils::errors::{Result, ShImagesError};
 
@@ -139,7 +142,12 @@ pub fn load_image(path: &Path) -> Result<LoadedImage> {
 /// Un GIF de un solo frame se devuelve como `Static` (no hay nada que animar).
 fn load_animated_gif(path: &Path) -> Result<LoadedImage> {
     let file = std::fs::File::open(path)?;
-    let decoder = GifDecoder::new(BufReader::new(file)).map_err(map_image_error)?;
+    let mut decoder = GifDecoder::new(BufReader::new(file)).map_err(map_image_error)?;
+    // Limita el tamaño de los buffers de frame; un GIF corrupto que declara
+    // dimensiones absurdas se rechaza rápido en vez de colgar el worker.
+    decoder
+        .set_limits(Limits::default())
+        .map_err(map_image_error)?;
     let mut frames = Vec::new();
     for frame in decoder.into_frames() {
         let frame = frame.map_err(map_image_error)?;
