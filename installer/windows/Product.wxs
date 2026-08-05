@@ -18,7 +18,10 @@
       Platform="x64"
       SummaryCodepage="1252" />
 
-    <MediaTemplate />
+    <!-- EmbedCab="yes": el CAB va embebido dentro del MSI (autocontenido).
+         Sin esto, WiX genera un cab externo (cab1.cab) y el instalador
+         falla con "Source file not found cab1.cab" al distribuir solo el .msi. -->
+    <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="AppIcon" SourceFile="icon.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
