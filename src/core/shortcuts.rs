@@ -1,10 +1,6 @@
-//! Atajos de teclado configurables (implementación completa en Task 3).
-
 use serde::{Deserialize, Serialize};
 
 use crate::core::actions::Action;
-
-/// Tecla de un atajo (subconjunto serializable de `egui::Key`, sin egui en core).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyCode {
@@ -23,20 +19,13 @@ pub enum KeyCode {
     Comma,
     Period,
 }
-
-/// Modificadores de un atajo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Modifiers {
-    /// Sin modificadores.
     None,
-    /// Ctrl.
     Ctrl,
-    /// Ctrl + Shift.
     CtrlShift,
 }
-
-/// Combinación de tecla + modificadores de un atajo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct KeyBinding {
     pub key: KeyCode,
@@ -44,27 +33,19 @@ pub struct KeyBinding {
 }
 
 impl KeyBinding {
-    /// Crea un binding.
     pub fn new(key: KeyCode, modifiers: Modifiers) -> Self {
         Self { key, modifiers }
     }
 }
-
-/// Error de un atajo inválido.
 #[derive(Debug, thiserror::Error)]
 pub enum ShortcutError {
-    /// El binding ya está asignado a otra acción.
     #[error("shortcut already assigned to {0:?}")]
     Conflict(Action),
-    /// Tecla no reconocida al parsear.
     #[error("unknown key: {0}")]
     InvalidKey(String),
-    /// Input vacío al parsear.
     #[error("empty shortcut")]
     Empty,
 }
-
-/// Mapa acción → atajo, serializable en `settings.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShortcutMap {
     bindings: std::collections::BTreeMap<Action, KeyBinding>,
@@ -77,7 +58,6 @@ impl Default for ShortcutMap {
 }
 
 impl ShortcutMap {
-    /// Mapa con los atajos por defecto (una entrada por acción).
     pub fn defaults() -> Self {
         let bindings = Action::all()
             .into_iter()
@@ -85,16 +65,9 @@ impl ShortcutMap {
             .collect();
         Self { bindings }
     }
-
-    /// Devuelve el binding de `action`, o `None` si no está mapeada.
     pub fn get(&self, action: Action) -> Option<&KeyBinding> {
         self.bindings.get(&action)
     }
-
-    /// Asigna `binding` a `action`.
-    ///
-    /// # Errors
-    /// * `ShortcutError::Conflict(other)` si `binding` ya lo usa `other`.
     pub fn assign(&mut self, action: Action, binding: KeyBinding) -> Result<(), ShortcutError> {
         if let Some((other, _)) = self
             .bindings
@@ -106,28 +79,21 @@ impl ShortcutMap {
         self.bindings.insert(action, binding);
         Ok(())
     }
-
-    /// Devuelve la acción que usa `binding`, o `None`.
     pub fn action_for(&self, binding: KeyBinding) -> Option<Action> {
         self.bindings
             .iter()
             .find(|(_, b)| **b == binding)
             .map(|(a, _)| *a)
     }
-
-    /// Vuelve a los atajos por defecto.
     pub fn reset(&mut self) {
         *self = Self::defaults();
     }
-
-    /// Iterador sobre las `(Action, KeyBinding)` del mapa (orden estable).
     pub fn iter(&self) -> impl Iterator<Item = (Action, KeyBinding)> + '_ {
         self.bindings.iter().map(|(a, b)| (*a, *b))
     }
 }
 
 impl KeyCode {
-    /// Nombre corto para `KeyBinding::to_string` (`"→"`, `"F"`, `"F11"`).
     fn to_str(self) -> &'static str {
         match self {
             KeyCode::ArrowLeft => "←",
@@ -146,8 +112,6 @@ impl KeyCode {
             KeyCode::Period => ".",
         }
     }
-
-    /// Parsea el nombre corto devuelto por `to_str`.
     fn from_str(s: &str) -> Option<Self> {
         match s {
             "←" => Some(KeyCode::ArrowLeft),
@@ -181,11 +145,6 @@ impl std::fmt::Display for KeyBinding {
 }
 
 impl KeyBinding {
-    /// Parsea la representación de `Display` (`"Ctrl+O"`, `"→"`, `"F11"`).
-    ///
-    /// # Errors
-    /// * `ShortcutError::Empty` si el input está vacío.
-    /// * `ShortcutError::InvalidKey` si la tecla no se reconoce.
     pub fn parse(input: &str) -> Result<Self, ShortcutError> {
         if input.trim().is_empty() {
             return Err(ShortcutError::Empty);
@@ -208,11 +167,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_has_one_entry_per_action() {
+    fn defaults_has_one_entry_per_action_with_shortcut() {
         let map = ShortcutMap::defaults();
         assert_eq!(map.iter().count(), 14);
+        let no_shortcut = &[
+            Action::SetDefaultViewer,
+            Action::Edit,
+            Action::SaveCopy,
+            Action::SaveAs,
+            Action::CancelEdit,
+            Action::ResetEdit,
+            Action::ApplyCrop,
+            Action::SetLangEs,
+            Action::SetLangEn,
+        ];
         for action in Action::all() {
-            assert!(map.get(action).is_some(), "{action:?} sin binding default");
+            if no_shortcut.contains(&action) {
+                assert!(
+                    map.get(action).is_none(),
+                    "{action:?} no debe tener binding default"
+                );
+            } else {
+                assert!(map.get(action).is_some(), "{action:?} sin binding default");
+            }
         }
     }
 
@@ -334,21 +311,17 @@ mod tests {
         let back: ShortcutMap = toml::from_str(&s).expect("deserializar");
         assert_eq!(back, map);
     }
-
-    /// Congela el mapa default completo para detectar cambios no intencionados.
     #[test]
     fn snapshot_default_shortcuts_map() {
         let map = ShortcutMap::defaults();
         let s = toml::to_string(&map).expect("serializar");
         insta::assert_snapshot!(s);
     }
-
-    /// Congela la representación mostrada en la UI de todos los defaults.
     #[test]
     fn snapshot_default_keybinding_strings() {
         let strings: Vec<String> = ShortcutMap::defaults()
             .iter()
-            .map(|(a, b)| format!("{} -> {}", a.label(), b))
+            .map(|(a, b)| format!("{} -> {}", a.label(crate::core::lang::Language::Es), b))
             .collect();
         insta::assert_snapshot!(strings.join("\n"));
     }

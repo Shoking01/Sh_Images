@@ -1,40 +1,32 @@
-//! Editor modal de atajos de teclado.
-//!
-//! Captura la siguiente tecla pulsada y la asigna a la acción seleccionada,
-//! usando `ShortcutMap::assign` (que valida conflictos). Solo presenta y edita
-//! el mapa; `app.rs` persiste cuando el mapa cambió.
-
 use eframe::egui;
 
 use crate::core::actions::Action;
+use crate::core::lang::Language;
 use crate::core::shortcuts::{KeyBinding, KeyCode, Modifiers, ShortcutError, ShortcutMap};
-
-/// Estado del dialog de atajos.
 #[derive(Debug, Default)]
 pub struct ShortcutDialog {
-    /// Si el dialog está abierto.
     pub open: bool,
-    /// Acción esperando que el usuario pulse una tecla.
     capture_for: Option<Action>,
-    /// Error inline a mostrar (conflicto, etc.).
     error: Option<String>,
 }
 
 impl ShortcutDialog {
-    /// Pinta el dialog y devuelve `true` si el mapa cambió (para persistir).
-    pub fn show(&mut self, ui: &mut egui::Ui, shortcuts: &mut ShortcutMap) -> bool {
+    pub fn show(&mut self, ui: &mut egui::Ui, shortcuts: &mut ShortcutMap, lang: Language) -> bool {
         let mut changed = false;
-        egui::Window::new("Atajos de teclado")
+        egui::Window::new("⌨")
             .open(&mut self.open)
             .collapsible(false)
             .resizable(false)
             .default_width(420.0)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ui.ctx(), |ui| {
+                let t = lang.translations();
                 if let Some(action) = self.capture_for {
                     ui.label(format!(
-                        "Pulsa la nueva combinación para «{}» (Esc cancela)",
-                        action.label()
+                        "{} «{}» (Esc {})",
+                        t.capture_prefix,
+                        action.label(lang),
+                        t.capture_suffix
                     ));
                     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                         self.capture_for = None;
@@ -47,12 +39,16 @@ impl ShortcutDialog {
                                 self.error = None;
                             }
                             Err(ShortcutError::Conflict(other)) => {
-                                self.error =
-                                    Some(format!("«{}» ya usa esa combinación", other.label()));
+                                self.error = Some(format!(
+                                    "{} «{}» {}",
+                                    t.conflict_prefix,
+                                    other.label(lang),
+                                    t.conflict_suffix
+                                ));
                                 self.capture_for = None;
                             }
                             Err(ShortcutError::InvalidKey(_)) | Err(ShortcutError::Empty) => {
-                                self.error = Some("Combinación no válida".to_string());
+                                self.error = Some(t.invalid_combo.to_string());
                             }
                         }
                     }
@@ -66,7 +62,7 @@ impl ShortcutDialog {
                                     .get(action)
                                     .map(|b| b.to_string())
                                     .unwrap_or_else(|| "—".to_string());
-                                ui.label(action.label());
+                                ui.label(action.label(lang));
                                 ui.label(current);
                                 if ui.button("Cambiar…").clicked() {
                                     self.capture_for = Some(action);
@@ -75,7 +71,7 @@ impl ShortcutDialog {
                                 ui.end_row();
                             }
                         });
-                    if ui.button("Restablecer todos").clicked() {
+                    if ui.button(t.reset_all).clicked() {
                         shortcuts.reset();
                         changed = true;
                     }
@@ -87,9 +83,6 @@ impl ShortcutDialog {
         changed
     }
 }
-
-/// Devuelve la primera tecla pulsada este frame como `KeyBinding`, ignorando
-/// modificadores solos. `None` si no hay ninguna asignable.
 fn pressed_binding(ui: &egui::Ui) -> Option<KeyBinding> {
     ui.input(|i| {
         i.events.iter().find_map(|event| match event {
@@ -103,11 +96,6 @@ fn pressed_binding(ui: &egui::Ui) -> Option<KeyBinding> {
         })
     })
 }
-
-/// Traduce una tecla + modificadores de egui al `KeyBinding` de core.
-///
-/// Solo mapea las teclas que existen en `KeyCode`; el resto devuelve `None`
-/// (se ignoran). Ctrl+Shift se mapea a `Modifiers::CtrlShift`; Alt se ignora.
 pub fn keybinding_from_egui(key: egui::Key, modifiers: egui::Modifiers) -> Option<KeyBinding> {
     let code = match key {
         egui::Key::ArrowLeft => KeyCode::ArrowLeft,

@@ -1,9 +1,3 @@
-//! Cache LRU de imágenes decodificadas, thread-safe.
-//!
-//! `core/` no depende de `egui` (AGENTS.md §3.2). La `DynamicImage` viene del
-//! crate `image`, ya presente. El cache es puramente en memoria: `insert` y
-//! `get` no devuelven `Result` porque no hay I/O (Decisión 8 del spec).
-
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -12,35 +6,22 @@ use std::sync::{Mutex, MutexGuard};
 use image::DynamicImage;
 
 use crate::core::image_loader::LoadedImage;
-
-/// Límite de memoria por defecto en MiB (coincide con `Settings::default()`).
 pub const DEFAULT_MEMORY_LIMIT_MB: u64 = 512;
-
-/// Índice "sin enlace" para las sentinelas de la lista LRU.
 const NO_NODE: usize = usize::MAX;
-
-/// Entrada del cache: imagen decodificada + coste en bytes.
 struct CacheEntry {
     image: LoadedImage,
     bytes: u64,
 }
-
-/// Nodo de la lista LRU; `prev`/`next` son índices en `nodes`
-/// (`NO_NODE` = sin enlace).
 struct Node {
     key: PathBuf,
     value: CacheEntry,
     prev: usize,
     next: usize,
 }
-
-/// Estado interno del cache, protegido por `Mutex`.
 struct CacheInner {
     map: HashMap<PathBuf, usize>,
     nodes: Vec<Node>,
-    /// Índice del nodo más recientemente usado (MRU).
     head: usize,
-    /// Índice del nodo menos recientemente usado (LRU).
     tail: usize,
     memory_used: u64,
     memory_limit_mb: u64,
@@ -49,12 +30,9 @@ struct CacheInner {
 }
 
 impl CacheInner {
-    /// Límite de memoria en bytes.
     fn limit_bytes(&self) -> u64 {
         self.memory_limit_mb.saturating_mul(1024 * 1024)
     }
-
-    /// Inserta `index` al frente de la lista (MRU).
     fn push_front(&mut self, index: usize) {
         let old_head = self.head;
         self.nodes[index].prev = NO_NODE;
@@ -66,8 +44,6 @@ impl CacheInner {
         }
         self.head = index;
     }
-
-    /// Desengancha `index` de la lista (mantiene `head`/`tail` correctos).
     fn unlink(&mut self, index: usize) {
         let (prev, next) = (self.nodes[index].prev, self.nodes[index].next);
         if prev != NO_NODE {
@@ -83,8 +59,6 @@ impl CacheInner {
         self.nodes[index].prev = NO_NODE;
         self.nodes[index].next = NO_NODE;
     }
-
-    /// Mueve `index` al frente de la lista (MRU).
     fn move_to_front(&mut self, index: usize) {
         if self.head == index {
             return;
@@ -92,9 +66,6 @@ impl CacheInner {
         self.unlink(index);
         self.push_front(index);
     }
-
-    /// Elimina el nodo `index` del arena con `swap_remove` y repara los índices
-    /// del nodo desplazado (`map`, `head`/`tail` y enlaces de sus vecinos).
     fn remove_node(&mut self, index: usize) -> Node {
         let last = self.nodes.len() - 1;
         let node = self.nodes.swap_remove(index);
@@ -115,8 +86,6 @@ impl CacheInner {
         }
         node
     }
-
-    /// Borra todo el estado (recuperación defensiva ante invariantes rotas).
     fn clear(&mut self) {
         self.map.clear();
         self.nodes.clear();
@@ -124,14 +93,7 @@ impl CacheInner {
         self.tail = NO_NODE;
         self.memory_used = 0;
     }
-
-    /// Inserta una imagen; evicta en orden LRU hasta caber. All-or-nothing: si
-    /// la imagen sola excede el límite, no cachea ni evicta nada.
     fn insert(&mut self, path: PathBuf, image: LoadedImage) -> InsertResult {
-        // Una imagen animada sin frames tendría coste 0 y un `get` posterior
-        // paniccía en `first_frame()`/`dimensions()` (AGENTS.md §2.1: nada de
-        // panics en producción, validar precondiciones en APIs públicas).
-        // No la cacheamos: no panicar y no asignar.
         if matches!(&image, LoadedImage::Animated(anim) if anim.frames.is_empty()) {
             return InsertResult {
                 cached: false,
@@ -147,8 +109,6 @@ impl CacheInner {
                 evicted_keys: Vec::new(),
             };
         }
-
-        // Reemplazo de una key existente.
         if let Some(&index) = self.map.get(&path) {
             let old_bytes = self.nodes[index].value.bytes;
             self.memory_used = self
@@ -163,8 +123,6 @@ impl CacheInner {
                 evicted_keys,
             };
         }
-
-        // Inserción de nodo nuevo.
         let index = self.nodes.len();
         self.nodes.push(Node {
             key: path.clone(),
@@ -175,8 +133,6 @@ impl CacheInner {
         self.map.insert(path, index);
         self.memory_used = self.memory_used.saturating_add(bytes);
         self.push_front(index);
-
-        // Evictar del tail (LRU) mientras exceda el límite.
         let evicted_keys = self.evict_to_limit();
 
         InsertResult {
@@ -184,10 +140,6 @@ impl CacheInner {
             evicted_keys,
         }
     }
-
-    /// Evicta del tail (LRU) mientras `memory_used` exceda el límite.
-    /// Devuelve las claves evictadas. Defensivo: si la lista se corrompe
-    /// (tail == NO_NODE con memoria por encima del límite), limpia el cache.
     fn evict_to_limit(&mut self) -> Vec<PathBuf> {
         let mut evicted = Vec::new();
         while self.memory_used > self.limit_bytes() {
@@ -207,9 +159,6 @@ impl CacheInner {
         }
         evicted
     }
-
-    /// Devuelve el índice del nodo para `path` (marcándolo como MRU) o `None`,
-    /// actualizando los contadores de hit/miss.
     fn get_index(&mut self, path: &Path) -> Option<usize> {
         match self.map.get(path).copied() {
             Some(index) => {
@@ -224,8 +173,6 @@ impl CacheInner {
         }
     }
 }
-
-/// Cache LRU de imágenes decodificadas, thread-safe.
 pub struct ImageCache {
     inner: Mutex<CacheInner>,
 }
@@ -237,7 +184,6 @@ impl Default for ImageCache {
 }
 
 impl ImageCache {
-    /// Crea el cache con límite en MiB.
     pub fn new(memory_limit_mb: u64) -> Self {
         Self {
             inner: Mutex::new(CacheInner {
@@ -252,31 +198,17 @@ impl ImageCache {
             }),
         }
     }
-
-    /// Bloquea el mutex recuperándose de un lock envenenado (nunca panic).
     fn lock(&self) -> MutexGuard<'_, CacheInner> {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
-
-    /// Inserta una `LoadedImage` decodificada; evicta en orden LRU hasta caber.
-    ///
-    /// All-or-nothing: si la imagen sola excede el límite, no cachea ni evicta.
     pub fn insert_loaded(&self, path: PathBuf, image: LoadedImage) -> InsertResult {
         self.lock().insert(path, image)
     }
-
-    /// Inserta una imagen estática decodificada (shim de `insert_loaded`).
-    ///
-    /// Conveniencia para callers que solo manejan `DynamicImage`.
     pub fn insert(&self, path: PathBuf, image: DynamicImage) -> InsertResult {
         self.insert_loaded(path, LoadedImage::Static(image))
     }
-
-    /// Devuelve la imagen cacheada (la marca como recién usada), o `None`.
-    ///
-    /// El `CacheEntryRef` mantiene el lock; se usa como `&LoadedImage` vía `Deref`.
     pub fn get(&self, path: &Path) -> Option<CacheEntryRef<'_>> {
         let mut inner = self.lock();
         let index = inner.get_index(path)?;
@@ -285,36 +217,21 @@ impl ImageCache {
             index,
         })
     }
-
-    /// `true` si `path` está en el cache, sin reordenar la lista LRU ni contar hits.
-    ///
-    /// A diferencia de `get`, no marca la entrada como recién usada y no altera
-    /// `hit_ratio`: sirve para "solo preguntar si está" (p.ej. planificar pre-carga).
     pub fn contains(&self, path: &Path) -> bool {
         self.lock().map.contains_key(path)
     }
-
-    /// Número de entradas en el cache.
     pub fn len(&self) -> usize {
         self.lock().map.len()
     }
-
-    /// `true` si no hay entradas.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
-    /// Bytes totales en uso.
     pub fn memory_used(&self) -> u64 {
         self.lock().memory_used
     }
-
-    /// Límite de memoria configurado en MiB.
     pub fn memory_limit_mb(&self) -> u64 {
         self.lock().memory_limit_mb
     }
-
-    /// Ratio de aciertos: hits / (hits + misses), 0.0 si no hubo accesos.
     pub fn hit_ratio(&self) -> f32 {
         let inner = self.lock();
         let total = inner.hit_count + inner.miss_count;
@@ -325,18 +242,10 @@ impl ImageCache {
         }
     }
 }
-
-/// Resultado de `insert`.
 pub struct InsertResult {
-    /// `true` si la imagen entró al cache.
     pub cached: bool,
-    /// Claves evictadas para hacer espacio (vacío si `cached: false`).
     pub evicted_keys: Vec<PathBuf>,
 }
-
-/// Acceso a una entrada cacheada; mantiene el `MutexGuard` vivo.
-///
-/// El caller lo usa como `&LoadedImage` vía `Deref` (sin clonar pixels).
 pub struct CacheEntryRef<'a> {
     guard: MutexGuard<'a, CacheInner>,
     index: usize,
@@ -348,16 +257,11 @@ impl Deref for CacheEntryRef<'_> {
         &self.guard.nodes[self.index].value.image
     }
 }
-
-/// Coste de una `DynamicImage` en bytes (dimensiones × canales).
 fn estimate_bytes(image: &DynamicImage) -> u64 {
     let (w, h) = (image.width() as u64, image.height() as u64);
     let bpp = image.color().bytes_per_pixel() as u64;
     w.saturating_mul(h).saturating_mul(bpp)
 }
-
-/// Coste en bytes de un `LoadedImage`: la suma de todos sus frames si es
-/// animado.
 fn estimate_loaded_bytes(image: &LoadedImage) -> u64 {
     match image {
         LoadedImage::Static(img) => estimate_bytes(img),
@@ -374,8 +278,6 @@ mod tests {
     use crate::core::image_loader::{AnimatedFrame, AnimatedImage, LoadedImage};
 
     const MIB: u64 = 1024 * 1024;
-
-    /// Helper: imagen RGBA de `w x h` (4 B/px).
     fn rgba(w: u32, h: u32) -> DynamicImage {
         DynamicImage::ImageRgba8(RgbaImage::new(w, h))
     }
@@ -506,10 +408,8 @@ mod tests {
         for name in ["a.png", "b.png", "c.png", "d.png"] {
             cache.insert(PathBuf::from(name), rgba(256, 256));
         }
-        // Acceder a la más vieja (a) la mueve al frente (MRU).
         assert!(cache.get(Path::new("a.png")).is_some());
         let res = cache.insert(PathBuf::from("e.png"), rgba(256, 256));
-        // La evictada ahora es b, no a.
         assert_eq!(res.evicted_keys, vec![PathBuf::from("b.png")]);
         assert!(cache.get(Path::new("a.png")).is_some());
         assert!(cache.get(Path::new("b.png")).is_none());
@@ -527,7 +427,6 @@ mod tests {
 
     #[test]
     fn replace_that_exceeds_limit_evicts_lru_entries() {
-        // Límite 1 MiB; 100 imágenes de 10 KiB llenan exactamente el límite.
         let cache = ImageCache::new(1);
         for i in 0..100 {
             let name = format!("img_{i:03}.png");
@@ -535,8 +434,6 @@ mod tests {
         }
         assert_eq!(cache.memory_used(), 100 * 32 * 80 * 4);
         assert_eq!(cache.len(), 100);
-
-        // Reemplazar img_000 (10 KiB) por una de 900 KiB dispara evicción LRU.
         let res = cache.insert(PathBuf::from("img_000.png"), rgba(480, 480)); // 921600 B
         assert!(res.cached);
         assert!(
@@ -547,7 +444,6 @@ mod tests {
             cache.memory_used() <= MIB,
             "memory_used debe quedar bajo el límite"
         );
-        // El reemplazo en sí queda cacheado.
         assert!(cache.get(Path::new("img_000.png")).is_some());
     }
 
@@ -597,10 +493,8 @@ mod tests {
         for name in ["a.png", "b.png", "c.png", "d.png"] {
             cache.insert(PathBuf::from(name), rgba(256, 256));
         }
-        // Solo preguntar por "a" (la más vieja) NO debe moverla a MRU.
         assert!(cache.contains(Path::new("a.png")));
         let res = cache.insert(PathBuf::from("e.png"), rgba(256, 256));
-        // Sigue evictándose a (LRU), no b.
         assert_eq!(res.evicted_keys, vec![PathBuf::from("a.png")]);
     }
 
@@ -667,15 +561,12 @@ mod tests {
 
     #[test]
     fn animated_lru_eviction_respects_summed_size() {
-        // Límite 1 MiB: caben dos imágenes animadas de 2 frames (512 KiB cada
-        // una). Una tercera del mismo tamaño fuerza la evicción de la más LRU.
         let cache = ImageCache::new(1);
         let res = cache.insert_loaded(PathBuf::from("a.gif"), animated_big());
         assert!(res.cached);
         let res2 = cache.insert_loaded(PathBuf::from("b.gif"), animated_big());
         assert!(res2.cached);
         assert_eq!(cache.len(), 2);
-        // Una tercera animada del mismo tamaño fuerza evicción de `a.gif`.
         let res3 = cache.insert_loaded(PathBuf::from("c.gif"), animated_big());
         assert!(res3.cached);
         assert_eq!(cache.len(), 2);
@@ -685,7 +576,6 @@ mod tests {
     }
 
     fn animated_big() -> LoadedImage {
-        // 2 frames de 256x256 RGBA = 2 * 262144 B = 512 KiB.
         LoadedImage::Animated(AnimatedImage {
             frames: vec![
                 AnimatedFrame {

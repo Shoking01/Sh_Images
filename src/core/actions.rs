@@ -1,89 +1,92 @@
-//! Acciones de la aplicación, centralizadas.
-//!
-//! Toolbar, menú y atajos convergen en el mismo enum; `app.rs::dispatch` es el
-//! único punto que las ejecuta. `core/` no depende de `egui`.
-
 use serde::{Deserialize, Serialize};
 
+use crate::core::lang::Language;
 use crate::core::shortcuts::{KeyBinding, KeyCode, Modifiers};
-
-/// Todas las acciones invocables de la app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
-    /// Abrir un archivo con el diálogo nativo.
     Open,
-    /// Imagen anterior.
     Prev,
-    /// Imagen siguiente.
     Next,
-    /// Rotar 90° en sentido horario.
     RotateCw,
-    /// Rotar 90° en sentido antihorario.
     RotateCcw,
-    /// Ajustar la imagen a la ventana.
     Fit,
-    /// Alternar pantalla completa.
     Fullscreen,
-    /// Alternar tema oscuro/claro.
     ToggleTheme,
-    /// Mostrar u ocultar el sidebar.
     ToggleSidebar,
-    /// Mostrar u ocultar la información de la imagen.
     ToggleInfo,
-    /// Iniciar o detener el slideshow automático.
     ToggleSlideshow,
-    /// Acelerar el slideshow.
     SlideshowFaster,
-    /// Ralentizar el slideshow.
     SlideshowSlower,
-    /// Abrir el editor de atajos de teclado.
     EditShortcuts,
+    SetDefaultViewer,
+    Edit,
+    SaveCopy,
+    SaveAs,
+    CancelEdit,
+    ResetEdit,
+    ApplyCrop,
+    SetLangEs,
+    SetLangEn,
 }
 
 impl Action {
-    /// Texto humano de la acción (para botones y tooltips).
-    pub fn label(self) -> &'static str {
+    pub fn label(self, lang: Language) -> &'static str {
+        let t = lang.translations();
         match self {
-            Action::Open => "Abrir",
-            Action::Prev => "Anterior",
-            Action::Next => "Siguiente",
-            Action::RotateCw => "Rotar 90° CW",
-            Action::RotateCcw => "Rotar 90° CCW",
-            Action::Fit => "Ajustar a la ventana",
-            Action::Fullscreen => "Pantalla completa",
-            Action::ToggleTheme => "Cambiar tema",
-            Action::ToggleSidebar => "Mostrar/ocultar barra lateral",
-            Action::ToggleInfo => "Mostrar/ocultar información",
-            Action::ToggleSlideshow => "Iniciar/detener slideshow",
-            Action::SlideshowFaster => "Slideshow más rápido",
-            Action::SlideshowSlower => "Slideshow más lento",
-            Action::EditShortcuts => "Configurar atajos",
+            Action::Open => t.open,
+            Action::Prev => t.prev,
+            Action::Next => t.next,
+            Action::RotateCw => t.rotate_cw,
+            Action::RotateCcw => t.rotate_ccw,
+            Action::Fit => t.fit,
+            Action::Fullscreen => t.fullscreen,
+            Action::ToggleTheme => t.toggle_theme,
+            Action::ToggleSidebar => t.toggle_sidebar,
+            Action::ToggleInfo => t.toggle_info,
+            Action::ToggleSlideshow => t.toggle_slideshow,
+            Action::SlideshowFaster => t.slideshow_faster,
+            Action::SlideshowSlower => t.slideshow_slower,
+            Action::EditShortcuts => t.edit_shortcuts,
+            Action::SetDefaultViewer => t.set_default_viewer,
+            Action::Edit => t.edit,
+            Action::SaveCopy => t.save_copy,
+            Action::SaveAs => t.save_as,
+            Action::CancelEdit => t.cancel_edit,
+            Action::ResetEdit => t.reset_edit,
+            Action::ApplyCrop => t.apply_crop,
+            Action::SetLangEs => "🌐 ES",
+            Action::SetLangEn => "🌐 EN",
         }
     }
-
-    /// Atajo por defecto de la acción.
     pub fn default_shortcut(self) -> Option<KeyBinding> {
-        Some(match self {
-            Action::Open => KeyBinding::new(KeyCode::KeyO, Modifiers::Ctrl),
-            Action::Prev => KeyBinding::new(KeyCode::ArrowLeft, Modifiers::None),
-            Action::Next => KeyBinding::new(KeyCode::ArrowRight, Modifiers::None),
-            Action::RotateCw => KeyBinding::new(KeyCode::CloseBracket, Modifiers::Ctrl),
-            Action::RotateCcw => KeyBinding::new(KeyCode::OpenBracket, Modifiers::Ctrl),
-            Action::Fit => KeyBinding::new(KeyCode::KeyF, Modifiers::None),
-            Action::Fullscreen => KeyBinding::new(KeyCode::F11, Modifiers::None),
-            Action::ToggleTheme => KeyBinding::new(KeyCode::KeyT, Modifiers::Ctrl),
-            Action::ToggleSidebar => KeyBinding::new(KeyCode::KeyH, Modifiers::None),
-            Action::ToggleInfo => KeyBinding::new(KeyCode::KeyI, Modifiers::None),
-            Action::ToggleSlideshow => KeyBinding::new(KeyCode::KeyF5, Modifiers::None),
-            Action::SlideshowFaster => KeyBinding::new(KeyCode::Comma, Modifiers::None),
-            Action::SlideshowSlower => KeyBinding::new(KeyCode::Period, Modifiers::None),
-            Action::EditShortcuts => KeyBinding::new(KeyCode::KeyK, Modifiers::Ctrl),
-        })
+        match self {
+            Action::Open => Some(KeyBinding::new(KeyCode::KeyO, Modifiers::Ctrl)),
+            Action::Prev => Some(KeyBinding::new(KeyCode::ArrowLeft, Modifiers::None)),
+            Action::Next => Some(KeyBinding::new(KeyCode::ArrowRight, Modifiers::None)),
+            Action::RotateCw => Some(KeyBinding::new(KeyCode::CloseBracket, Modifiers::Ctrl)),
+            Action::RotateCcw => Some(KeyBinding::new(KeyCode::OpenBracket, Modifiers::Ctrl)),
+            Action::Fit => Some(KeyBinding::new(KeyCode::KeyF, Modifiers::None)),
+            Action::Fullscreen => Some(KeyBinding::new(KeyCode::F11, Modifiers::None)),
+            Action::ToggleTheme => Some(KeyBinding::new(KeyCode::KeyT, Modifiers::Ctrl)),
+            Action::ToggleSidebar => Some(KeyBinding::new(KeyCode::KeyH, Modifiers::None)),
+            Action::ToggleInfo => Some(KeyBinding::new(KeyCode::KeyI, Modifiers::None)),
+            Action::ToggleSlideshow => Some(KeyBinding::new(KeyCode::KeyF5, Modifiers::None)),
+            Action::SlideshowFaster => Some(KeyBinding::new(KeyCode::Comma, Modifiers::None)),
+            Action::SlideshowSlower => Some(KeyBinding::new(KeyCode::Period, Modifiers::None)),
+            Action::EditShortcuts => Some(KeyBinding::new(KeyCode::KeyK, Modifiers::Ctrl)),
+            Action::SetDefaultViewer => None,
+            Action::Edit => None,
+            Action::SaveCopy => None,
+            Action::SaveAs => None,
+            Action::CancelEdit => None,
+            Action::ResetEdit => None,
+            Action::ApplyCrop => None,
+            Action::SetLangEs => None,
+            Action::SetLangEn => None,
+        }
     }
-
-    /// Todas las variantes en orden estable (para el editor de atajos).
-    pub fn all() -> [Action; 14] {
+    pub fn all() -> [Action; 23] {
         [
             Action::Open,
             Action::Prev,
@@ -99,6 +102,15 @@ impl Action {
             Action::SlideshowFaster,
             Action::SlideshowSlower,
             Action::EditShortcuts,
+            Action::SetDefaultViewer,
+            Action::Edit,
+            Action::SaveCopy,
+            Action::SaveAs,
+            Action::CancelEdit,
+            Action::ResetEdit,
+            Action::ApplyCrop,
+            Action::SetLangEs,
+            Action::SetLangEn,
         ]
     }
 }
@@ -106,48 +118,77 @@ impl Action {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::lang::Language;
 
     #[test]
     fn every_action_has_a_label() {
         for action in Action::all() {
-            assert!(!action.label().is_empty(), "{action:?} sin label");
-        }
-    }
-
-    #[test]
-    fn every_action_has_a_default_shortcut() {
-        for action in Action::all() {
             assert!(
-                action.default_shortcut().is_some(),
-                "{action:?} sin atajo por defecto"
+                !action.label(Language::Es).is_empty(),
+                "{action:?} sin label"
             );
         }
     }
 
     #[test]
-    fn label_is_stable_and_descriptive() {
-        assert_eq!(Action::Open.label(), "Abrir");
-        assert_eq!(Action::Next.label(), "Siguiente");
-        assert_eq!(Action::RotateCw.label(), "Rotar 90° CW");
-        assert_eq!(Action::EditShortcuts.label(), "Configurar atajos");
-        assert_eq!(Action::ToggleInfo.label(), "Mostrar/ocultar información");
-        assert_eq!(Action::ToggleSlideshow.label(), "Iniciar/detener slideshow");
-        assert_eq!(Action::SlideshowFaster.label(), "Slideshow más rápido");
-        assert_eq!(Action::SlideshowSlower.label(), "Slideshow más lento");
+    fn every_action_has_a_default_shortcut_except_ui_only() {
+        let no_shortcut = &[
+            Action::SetDefaultViewer,
+            Action::Edit,
+            Action::SaveCopy,
+            Action::SaveAs,
+            Action::CancelEdit,
+            Action::ResetEdit,
+            Action::ApplyCrop,
+            Action::SetLangEs,
+            Action::SetLangEn,
+        ];
+        for action in Action::all() {
+            if no_shortcut.contains(&action) {
+                assert!(
+                    action.default_shortcut().is_none(),
+                    "{action:?} no debe tener atajo por defecto"
+                );
+            } else {
+                assert!(
+                    action.default_shortcut().is_some(),
+                    "{action:?} sin atajo por defecto"
+                );
+            }
+        }
     }
 
     #[test]
-    fn all_returns_fourteen_actions() {
+    fn label_is_stable_and_descriptive() {
+        assert_eq!(Action::Open.label(Language::Es), "Abrir");
+        assert_eq!(Action::Next.label(Language::Es), "Siguiente");
+        assert_eq!(Action::RotateCw.label(Language::Es), "Rotar 90° CW");
+        assert_eq!(
+            Action::EditShortcuts.label(Language::Es),
+            "Configurar atajos"
+        );
+        assert_eq!(Action::ToggleInfo.label(Language::Es), "Información");
+        assert_eq!(Action::ToggleSlideshow.label(Language::Es), "Slideshow");
+        assert_eq!(
+            Action::SlideshowFaster.label(Language::Es),
+            "Slideshow más rápido"
+        );
+        assert_eq!(
+            Action::SlideshowSlower.label(Language::Es),
+            "Slideshow más lento"
+        );
+    }
+
+    #[test]
+    fn all_returns_twenty_three_actions() {
         let all = Action::all();
-        assert_eq!(all.len(), 14);
+        assert_eq!(all.len(), 23);
         let unique: std::collections::HashSet<_> = all.into_iter().collect();
-        assert_eq!(unique.len(), 14, "sin variantes duplicadas");
+        assert_eq!(unique.len(), 23, "sin variantes duplicadas");
     }
 
     #[test]
     fn serde_roundtrip_uses_snake_case_names() {
-        // TOML no serializa una variante unit suelta; se envuelve en un struct
-        // (igual que hará `ShortcutMap` como campo de `Settings`).
         #[derive(Serialize, Deserialize, PartialEq, Debug)]
         struct Wrap {
             action: Action,

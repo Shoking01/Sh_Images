@@ -111,8 +111,8 @@ fn flujo_zoom_fit_centrado() {
     assert!((img_center.x - center.x).abs() < 1e-3, "centrada en x");
     assert!((img_center.y - center.y).abs() < 1e-3, "centrada en y");
 
-    // Zoom in con rueda: sigue centrada.
-    t.apply_center(2.0);
+    // Zoom in con rueda anclado al centro: sigue centrada.
+    t.apply_zoom_at(center, 2.0);
     assert!(t.zoom > fit, "zoom in supera el fit");
     let origin2 = t.image_origin_screen();
     let img_center2 = origin2.add(Vec2::new(2000.0 * t.zoom * 0.5, 1000.0 * t.zoom * 0.5));
@@ -189,6 +189,7 @@ fn flujo_configuracion_persistencia() {
         theme: "light".to_string(),
         shortcuts: ShortcutMap::defaults(),
         slideshow_interval_secs: 5,
+        language: sh_images::core::lang::Language::Es,
     };
     modified.save(&path).expect("guardar modificado");
 

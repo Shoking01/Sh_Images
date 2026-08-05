@@ -1,3 +1,3 @@
-//! Persistencia de configuración.
+//! Configuration persistence.
 
 pub mod settings;

@@ -1,7 +1,6 @@
-//! Punto de entrada: inicialización de logging y arranque de `eframe`.
+//! Entry point: logging initialization and `eframe` startup.
 //!
-//! En Windows, `windows_subsystem = "windows"` elimina la consola del .exe
-//! para que el visor no muestre una ventana de terminal (Fase 5).
+//! On Windows, `windows_subsystem = "windows"` removes the console from the .exe.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -10,9 +9,7 @@ use std::path::PathBuf;
 use eframe::egui;
 use sh_images::app::ShImagesApp;
 
-/// Inicializa el logging estructurado (`tracing`).
-///
-/// Nivel `DEBUG` en builds de debug, `INFO` en release (AGENTS.md §7.3).
+/// Initializes structured logging (`tracing`).
 fn init_logging() {
     let level = if cfg!(debug_assertions) {
         tracing::Level::DEBUG
@@ -22,11 +19,7 @@ fn init_logging() {
     tracing_subscriber::fmt().with_max_level(level).init();
 }
 
-/// Extrae el primer argumento de línea de comandos como path de imagen.
-///
-/// - `"sh_images.exe"` → `None` (abre el diálogo como siempre).
-/// - `"sh_images.exe C:\foto.png"` → `Some("C:\foto.png")`.
-/// - Args vacías o whitespace → `None`.
+/// Extracts the first CLI argument as an image path.
 pub fn parse_cli_path() -> Option<PathBuf> {
     std::env::args()
         .nth(1)
@@ -35,7 +28,7 @@ pub fn parse_cli_path() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Arranca la aplicación con una ventana de 1280x800.
+/// Starts the app with a 1280x800 window.
 fn main() -> eframe::Result<()> {
     init_logging();
     let initial_path = parse_cli_path();
@@ -59,7 +52,6 @@ mod tests {
 
     #[test]
     fn parse_path_from_argv() {
-        // Simula el contracto de parse_cli_path: con un path válido en args[1].
         let sample = vec!["sh_images.exe".to_string(), "C:\\foto.png".to_string()];
         let parsed = sample
             .into_iter()

@@ -1,25 +1,7 @@
-//! Cola FIFO de paths a miniaturizar, compartida entre el pool de workers y la
-//! UI thread.
-//!
-//! A diferencia de un `Arc<Mutex<mpsc::Receiver<_>>>` compartido, esta cola
-//! usa un `Condvar`: un worker que espera por trabajo **libera** el lock, por lo
-//! que la UI thread puede drenar la cola (cambio de carpeta) sin riesgo de
-//! deadlock.
-//!
-//! Invariantes:
-//! * `pop` devuelve `None` solo si la cola fue cerrada (`close`) **y** ya no
-//!   quedan paths pendientes; nunca por cola vacía (bloquea hasta que haya un
-//!   path o se cierre y se agote).
-//! * `drain` elimina todos los paths pendientes; los workers en `pop` siguen
-//!   bloqueados esperando trabajo nuevo.
-
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-
-/// Cola FIFO de paths a miniaturizar, segura para múltiples productores y
-/// consumidores.
 #[derive(Clone, Default)]
 pub struct ThumbQueue {
     inner: Arc<ThumbQueueInner>,
@@ -42,14 +24,9 @@ impl Default for ThumbQueueInner {
 }
 
 impl ThumbQueue {
-    /// Crea una cola abierta y vacía.
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// Crea una cola pre-cargada con `paths` (los workers la consumen en orden).
-    ///
-    /// Pensada para tests que necesitan una cola no vacía sin usar threads.
     pub fn from_paths<I>(paths: I) -> Self
     where
         I: IntoIterator<Item = PathBuf>,
@@ -60,20 +37,11 @@ impl ThumbQueue {
         drop(inner);
         queue
     }
-
-    /// Encola un path y despierta a un worker dormido.
     pub fn push(&self, path: PathBuf) {
         let mut inner = self.inner.queue.lock().unwrap_or_else(|p| p.into_inner());
         inner.push_back(path);
         self.inner.cv.notify_one();
     }
-
-    /// Extrae el siguiente path, bloqueando si la cola está vacía.
-    ///
-    /// # Returns
-    /// * `Some(path)` cuando hay trabajo.
-    /// * `None` si la cola fue cerrada con [`ThumbQueue::close`] y ya no quedan
-    ///   paths pendientes (los pendientes se drenan antes de devolver `None`).
     pub fn pop(&self) -> Option<PathBuf> {
         let mut inner = self.inner.queue.lock().unwrap_or_else(|p| p.into_inner());
         loop {
@@ -86,38 +54,20 @@ impl ThumbQueue {
             inner = self.inner.cv.wait(inner).unwrap_or_else(|p| p.into_inner());
         }
     }
-
-    /// Descarta todos los paths pendientes (cambio de carpeta).
-    ///
-    /// Los paths ya extraídos por un worker (en decodificación) no se pueden
-    /// cancelar; el descarte de esos resultados obsoletos lo hace el check de
-    /// epoch en el worker.
     pub fn drain(&self) {
         let mut inner = self.inner.queue.lock().unwrap_or_else(|p| p.into_inner());
         inner.clear();
     }
-
-    /// Cierra la cola: los workers bloqueados en `pop` salen con `None`.
-    ///
-    /// El flag se marca bajo el mutex para que el check de `pop` + la espera
-    /// sean atómicos respecto al cierre (si se marcara fuera, un `pop` podría
-    /// leer `false` justo antes del `notify_all` y dormirse para siempre).
-    /// Después de cerrar, `pop` sigue devolviendo los paths pendientes hasta
-    /// agotarlos y recién entonces devuelve `None`.
     pub fn close(&self) {
         let inner = self.inner.queue.lock().unwrap_or_else(|p| p.into_inner());
         self.inner.closed.store(true, Ordering::Release);
         drop(inner);
         self.inner.cv.notify_all();
     }
-
-    /// Número de paths pendientes (sin contar los que ya consumió un worker).
     pub fn len(&self) -> usize {
         let inner = self.inner.queue.lock().unwrap_or_else(|p| p.into_inner());
         inner.len()
     }
-
-    /// `true` si no hay paths pendientes.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

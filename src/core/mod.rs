@@ -1,9 +1,12 @@
 //! Lógica de negocio pura, sin dependencias de UI.
 
 pub mod actions;
+pub mod edit_state;
+pub mod editor;
 pub mod exif;
 pub mod image_cache;
 pub mod image_loader;
+pub mod lang;
 pub mod navigation;
 pub mod preload;
 pub mod shortcuts;

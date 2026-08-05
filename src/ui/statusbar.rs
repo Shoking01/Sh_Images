@@ -1,28 +1,13 @@
-//! Barra de estado inferior con la información de la imagen actual.
-//!
-//! Solo presenta: recibe un `StatusInfo` ya construido por `app.rs`. El único
-//! formateo con lógica (`format_status`, `format_bytes`) es puro y testeable.
-
 use eframe::egui;
-
-/// Información de la imagen actual que muestra la status bar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusInfo {
-    /// Nombre del archivo (sin ruta).
     pub name: String,
-    /// Ancho de la imagen en píxeles (sin rotar).
     pub width: u32,
-    /// Alto de la imagen en píxeles (sin rotar).
     pub height: u32,
-    /// Tamaño en disco en bytes; `None` si no se pudo leer.
     pub size_bytes: Option<u64>,
-    /// Índice 1-based de la imagen actual.
     pub index: usize,
-    /// Total de imágenes de la carpeta.
     pub total: usize,
 }
-
-/// Formatea una cantidad de bytes como `"512 B"`, `"4.2 MB"`, etc.
 pub fn format_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
@@ -38,8 +23,6 @@ pub fn format_bytes(bytes: u64) -> String {
         format!("{bytes} B")
     }
 }
-
-/// Construye la línea de la status bar: `"img.png · 3840×2160 · 4.2 MB · 3/50"`.
 pub fn format_status(info: &StatusInfo) -> String {
     let size = info
         .size_bytes
@@ -50,8 +33,6 @@ pub fn format_status(info: &StatusInfo) -> String {
         info.name, info.width, info.height, size, info.index, info.total
     )
 }
-
-/// Pinta la barra inferior con `info`.
 pub fn show(ui: &mut egui::Ui, info: &StatusInfo) {
     egui::Panel::bottom("statusbar")
         .exact_size(24.0)
@@ -104,8 +85,6 @@ mod tests {
         let s = format_status(&info("a.jpg", 64, 64, None, 1, 1));
         assert_eq!(s, "a.jpg · 64×64 · — · 1/1");
     }
-
-    /// Congela el formato de la status bar con una tabla de casos.
     #[test]
     fn snapshot_statusbar_format() {
         let cases = [

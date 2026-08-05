@@ -1,27 +1,7 @@
-//! Pre-carga de imágenes adyacentes (lógica pura, sin I/O ni threads).
-//!
-//! `core/` no depende de `egui` (AGENTS.md §3.2). La decisión de qué paths
-//! precargar es una función pura y testeable; el orquestado (spawnear workers)
-//! vive en `app.rs`.
-
 use std::path::{Path, PathBuf};
 
 use crate::core::navigation::Navigation;
-
-/// Profundidad de pre-carga: imágenes adyacentes por lado (N±1).
 pub const PRELOAD_DEPTH: isize = 1;
-
-/// Devuelve los paths a precargar, en orden de prioridad [N+1, N-1, N+2, N-2…].
-///
-/// # Arguments
-/// * `nav` - Estado de navegación actual.
-/// * `depth` - Cuántas imágenes adyacentes por lado considerar.
-/// * `is_cached` - Predicado: `true` si el path ya está en cache (se excluye).
-/// * `is_in_flight` - Predicado: `true` si el path ya se está cargando (se excluye).
-///
-/// # Returns
-/// Paths a precargar, sin duplicados, sin el path actual, y sin los ya
-/// cacheados ni en vuelo. Lista vacía si no hay imágenes.
 pub fn preload_targets(
     nav: &Navigation,
     depth: isize,

@@ -1,34 +1,33 @@
-//! Persistencia de preferencias de usuario en TOML.
-
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::lang::Language;
 use crate::core::shortcuts::ShortcutMap;
 use crate::utils::errors::{Result, ShImagesError};
 
-/// Valor por defecto del intervalo del slideshow (5 s).
 fn default_slideshow_interval_secs() -> u64 {
     5
 }
 
-/// Preferencias persistentes de la aplicación.
+fn default_language() -> Language {
+    Language::En
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
-    /// Límite de memoria del LRU cache en MiB (default: 512).
     #[serde(default)]
     pub cache_memory_limit_mb: u64,
-    /// Tema visual de la UI: `"dark"` | `"light"`.
     #[serde(default)]
     pub theme: String,
-    /// Atajos de teclado configurables (default: los de `ShortcutMap::defaults`).
     #[serde(default)]
     pub shortcuts: ShortcutMap,
-    /// Intervalo del slideshow en segundos (default: 5).
     #[serde(default = "default_slideshow_interval_secs")]
     pub slideshow_interval_secs: u64,
+    #[serde(default = "default_language")]
+    pub language: Language,
 }
 
 impl Default for Settings {
@@ -38,15 +37,12 @@ impl Default for Settings {
             theme: "dark".to_string(),
             shortcuts: ShortcutMap::defaults(),
             slideshow_interval_secs: 5,
+            language: Language::En,
         }
     }
 }
 
 impl Settings {
-    /// Carga las preferencias desde `path`.
-    ///
-    /// Si el archivo no existe, devuelve los defaults y los persiste en disco.
-    /// Si existe pero está corrupto, devuelve `ShImagesError::Config`.
     pub fn load(path: &Path) -> Result<Settings> {
         match fs::read_to_string(path) {
             Ok(content) => toml::from_str(&content).map_err(|e| {
@@ -60,8 +56,6 @@ impl Settings {
             Err(e) => Err(ShImagesError::Io(e)),
         }
     }
-
-    /// Persiste las preferencias en `path` (crea el directorio padre si falta, escribe a temp y renombra de forma atómica).
     pub fn save(&self, path: &Path) -> Result<()> {
         let content = toml::to_string_pretty(self)
             .map_err(|e| ShImagesError::Config(format!("failed to serialize settings: {e}")))?;
@@ -140,6 +134,7 @@ mod tests {
             theme: "light".to_string(),
             shortcuts: ShortcutMap::defaults(),
             slideshow_interval_secs: 5,
+            language: Language::En,
         };
 
         settings.save(&path).unwrap();
@@ -170,6 +165,7 @@ mod tests {
             theme: "dark".to_string(),
             shortcuts: ShortcutMap::defaults(),
             slideshow_interval_secs: 5,
+            language: Language::Es,
         };
 
         second.save(&path).unwrap();
@@ -200,9 +196,32 @@ mod tests {
             theme: "light".to_string(),
             shortcuts: ShortcutMap::defaults(),
             slideshow_interval_secs: 10,
+            language: Language::Es,
         };
         settings.save(&path).unwrap();
         let loaded = Settings::load(&path).unwrap();
         assert_eq!(loaded, settings);
+    }
+
+    #[test]
+    fn language_defaults_to_english() {
+        let s = Settings::default();
+        assert_eq!(s.language, Language::En);
+    }
+
+    #[test]
+    fn language_roundtrips() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let settings = Settings {
+            cache_memory_limit_mb: 256,
+            theme: "dark".to_string(),
+            shortcuts: ShortcutMap::defaults(),
+            slideshow_interval_secs: 5,
+            language: Language::En,
+        };
+        settings.save(&path).unwrap();
+        let loaded = Settings::load(&path).unwrap();
+        assert_eq!(loaded.language, Language::En);
     }
 }

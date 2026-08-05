@@ -1,34 +1,17 @@
-//! Navegación entre imágenes de una carpeta.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::utils::errors::{Result, ShImagesError};
-
-/// Extensiones de imagen soportadas (sin punto; el filtro es case-insensitive).
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "bmp", "webp", "tiff", "tif", "avif",
 ];
-
-/// Estado de navegación sobre la lista ordenada de imágenes de una carpeta.
 #[derive(Debug)]
 pub struct Navigation {
-    /// Rutas absolutas de las imágenes, ordenadas alfabéticamente.
     pub images: Vec<PathBuf>,
-    /// Índice de la imagen actual.
     pub current: usize,
 }
 
 impl Navigation {
-    /// Crea la navegación sobre la carpeta del archivo `image_path`.
-    ///
-    /// Lee el directorio padre de `image_path`, filtra por extensiones
-    /// soportadas (case-insensitive), ordena alfabéticamente y localiza el
-    /// índice de `image_path` (o 0 si no está).
-    ///
-    /// # Errors
-    /// * `ShImagesError::Io` si el directorio no existe o no puede leerse.
-    /// * `ShImagesError::Config` si `image_path` no tiene directorio padre.
     pub fn from_folder(image_path: &Path, supported_exts: &[&str]) -> Result<Self> {
         let folder = image_path.parent().ok_or_else(|| {
             ShImagesError::Config("image path has no parent directory".to_string())
@@ -45,33 +28,21 @@ impl Navigation {
         let current = images.iter().position(|p| p == image_path).unwrap_or(0);
         Ok(Self { images, current })
     }
-
-    /// Avanza a la siguiente imagen; al final de la lista vuelve al inicio.
     pub fn next(&mut self) {
         if self.images.is_empty() {
             return;
         }
         self.current = (self.current + 1) % self.images.len();
     }
-
-    /// Retrocede a la imagen anterior; al inicio de la lista va al final.
     pub fn prev(&mut self) {
         if self.images.is_empty() {
             return;
         }
         self.current = (self.current + self.images.len() - 1) % self.images.len();
     }
-
-    /// Ruta de la imagen actual, o `None` si la lista está vacía.
     pub fn current_path(&self) -> Option<&PathBuf> {
         self.images.get(self.current)
     }
-
-    /// Rutas previa y siguiente (circulares) respecto a la actual.
-    ///
-    /// `[None, None]` si la lista está vacía. Con una sola imagen, ambas
-    /// referencias apuntan a la misma ruta. No muta el estado (a diferencia de
-    /// `next()`/`prev()`).
     pub fn neighbor_paths(&self) -> [Option<&PathBuf>; 2] {
         let len = self.images.len();
         if len == 0 {
@@ -82,8 +53,6 @@ impl Navigation {
         [self.images.get(prev), self.images.get(next)]
     }
 }
-
-/// Devuelve `true` si `path` tiene una extensión en `supported_exts`.
 pub fn has_supported_extension(path: &Path, supported_exts: &[&str]) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())

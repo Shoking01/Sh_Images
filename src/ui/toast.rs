@@ -1,46 +1,31 @@
-//! Overlay de notificaciones (toasts) dibujado con egui.
-
 use eframe::egui;
-
-/// Duración de un toast en segundos.
 pub const TOAST_SECONDS: f64 = 3.0;
 
 struct Toast {
     message: String,
     expires_at: f64,
 }
-
-/// Colección de toasts visibles.
 #[derive(Default)]
 pub struct Toasts {
     items: Vec<Toast>,
 }
 
 impl Toasts {
-    /// Crea una colección vacía.
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// Añade un toast que expira `TOAST_SECONDS` después de `now` (segundos de egui).
     pub fn push(&mut self, message: impl Into<String>, now: f64) {
         self.items.push(Toast {
             message: message.into(),
             expires_at: now + TOAST_SECONDS,
         });
     }
-
-    /// Elimina los toasts expirados en `now`.
     pub fn update(&mut self, now: f64) {
         self.items.retain(|t| t.expires_at > now);
     }
-
-    /// Devuelve `true` si no hay toasts visibles.
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
-
-    /// Dibuja los toasts en la esquina inferior derecha.
     pub fn show(&self, ui: &mut egui::Ui) {
         if self.items.is_empty() {
             return;

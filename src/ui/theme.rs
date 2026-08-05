@@ -1,10 +1,4 @@
-//! Aplicación de temas visuales a `egui`.
-
 use egui;
-
-/// Aplica el tema `name` (`"dark"` o `"light"`) al contexto de `egui`.
-///
-/// Cualquier otro valor no modifica el tema actual.
 pub fn apply(ctx: &egui::Context, name: &str) {
     match name {
         "dark" => ctx.set_visuals(egui::Visuals::dark()),
@@ -14,11 +8,6 @@ pub fn apply(ctx: &egui::Context, name: &str) {
         }
     }
 }
-
-/// Devuelve el tema opuesto al dado, para alternar en la UI.
-///
-/// `"dark"` → `"light"`, `"light"` → `"dark"`. Cualquier otro valor cae a
-/// `"dark"` (con warning, para no perder el estado de tema desconocido).
 pub fn toggle(name: &str) -> &'static str {
     match name {
         "dark" => "light",

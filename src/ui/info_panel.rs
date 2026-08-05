@@ -1,8 +1,3 @@
-//! Panel derecho con la información EXIF de la imagen actual.
-//!
-//! Formatea `ExifImage` en filas campo:valor y pinta un `Panel::right`
-//! desplazable. La lectura (I/O) la orquesta `app.rs`; aquí solo se muestra.
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -10,11 +5,8 @@ use std::sync::Mutex;
 use eframe::egui;
 
 use crate::core::exif::{ExifImage, ExifRead, Rational};
-
-/// Estado del panel: solo su visibilidad; el contenido se lee del cache.
 #[derive(Debug)]
 pub struct InfoPanelState {
-    /// Si el panel debe mostrarse en pantalla.
     pub show: bool,
 }
 
@@ -23,19 +15,12 @@ impl Default for InfoPanelState {
         Self { show: true }
     }
 }
-
-/// Tipos de formateo numérico para los racionales EXIF.
 #[derive(Debug, Clone, Copy)]
 enum Fmt {
-    /// Apertura: `f/2.8`.
     Aperture,
-    /// Obturador: `1/125 s`.
     Shutter,
-    /// Distancia focal: `50 mm`.
     Focal,
 }
-
-/// Formatea un `Rational` según el tipo de campo al que pertenece.
 fn format_rational(r: Rational, fmt: Fmt) -> String {
     let d = r.to_f64();
     match fmt {
@@ -50,8 +35,6 @@ fn format_rational(r: Rational, fmt: Fmt) -> String {
         Fmt::Focal => format!("{d:.0} mm"),
     }
 }
-
-/// Convierte el código numérico de orientación EXIF en una etiqueta legible.
 fn orientation_label(o: u16) -> String {
     match o {
         1 => "Horizontal".to_string(),
@@ -59,11 +42,6 @@ fn orientation_label(o: u16) -> String {
         other => format!("Vertical ({other})"),
     }
 }
-
-/// Convierte `ExifImage` en filas `(etiqueta, valor)`; omite los campos ausentes.
-///
-/// Se mantienen los campos ausentes fuera de la salida para que el panel no
-/// muestre filas vacías.
 pub fn field_rows(img: &ExifImage) -> Vec<(String, String)> {
     let mut rows = Vec::new();
     if let Some(v) = &img.make {
@@ -92,12 +70,6 @@ pub fn field_rows(img: &ExifImage) -> Vec<(String, String)> {
     }
     rows
 }
-
-/// Pinta el panel derecho. Lee del cache compartido; `None` → "Cargando…".
-///
-/// `current` es la imagen activa; si el cache aún no la tiene procesada se
-/// muestra un texto provisional. Si la lectura falló se muestra un mensaje
-/// suave (sin propagar el error al UI thread).
 pub fn show(ui: &mut egui::Ui, cache: &Mutex<HashMap<PathBuf, ExifRead>>, current: &Path) {
     let entries = cache.lock().unwrap_or_else(|p| p.into_inner());
     egui::Panel::right("info")

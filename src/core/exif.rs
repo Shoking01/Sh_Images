@@ -1,15 +1,8 @@
-//! Extracción de metadatos EXIF (Fase 4).
-//!
-//! `core/` no depende de la UI: expone `ExifImage` curado, `Rational` y
-//! `read_exif`. Este módulo solo lee y mapea; la UI formatea.
-
 use std::path::Path;
 
 use exif::{In, Reader, Tag, Value};
 
 use crate::utils::errors::{Result, ShImagesError};
-
-/// Número racional EXIF (numerador/denominador).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rational {
     pub num: u64,
@@ -17,12 +10,9 @@ pub struct Rational {
 }
 
 impl Rational {
-    /// Crea un racional.
     pub fn new(num: u64, den: u64) -> Self {
         Self { num, den }
     }
-
-    /// Valor decimal (n/m), o `f64::NAN` si `den == 0`.
     pub fn to_f64(self) -> f64 {
         if self.den == 0 {
             f64::NAN
@@ -31,8 +21,6 @@ impl Rational {
         }
     }
 }
-
-/// Metadatos curados que el panel muestra.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ExifImage {
     pub make: Option<String>,
@@ -44,19 +32,12 @@ pub struct ExifImage {
     pub focal_length: Option<Rational>,
     pub orientacion: Option<u16>,
 }
-
-/// Resultado de una lectura: distingue "sin EXIF" de "error".
 #[derive(Debug)]
 pub enum ExifRead {
-    /// Metadatos leídos.
     Found(ExifImage),
-    /// El archivo no tiene bloque EXIF.
     None,
-    /// Error al leer/parsear.
     Error(ShImagesError),
 }
-
-/// Los formatos que pueden llevar EXIF en esta fase.
 fn is_exif_capable(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -68,10 +49,6 @@ fn is_exif_capable(path: &Path) -> bool {
         })
         .unwrap_or(false)
 }
-
-/// Lee un campo ASCII (primer valor), p. ej. Make/Model/DateTime.
-///
-/// `Value::Ascii` es `Vec<Vec<u8>>`; se toma el primer elemento y se limpia.
 fn ascii_value(exif: &exif::Exif, tag: Tag) -> Option<String> {
     let field = exif.get_field(tag, In::PRIMARY)?;
     if let Value::Ascii(v) = &field.value {
@@ -81,8 +58,6 @@ fn ascii_value(exif: &exif::Exif, tag: Tag) -> Option<String> {
         None
     }
 }
-
-/// Lee un RATIONAL (primer valor) como `Rational`, si el tag es de ese tipo.
 fn rational_value(exif: &exif::Exif, tag: Tag) -> Option<Rational> {
     let field = exif.get_field(tag, In::PRIMARY)?;
     if let Value::Rational(v) = &field.value {
@@ -92,13 +67,9 @@ fn rational_value(exif: &exif::Exif, tag: Tag) -> Option<Rational> {
         None
     }
 }
-
-/// Lee un entero sin signo (BYTE/SHORT/LONG), p. ej. Orientation.
 fn uint_value(exif: &exif::Exif, tag: Tag) -> Option<u32> {
     exif.get_field(tag, In::PRIMARY)?.value.get_uint(0)
 }
-
-/// ISO: algunos archivos usan `PhotographicSensitivity`, otros `ISOSpeed`.
 fn iso_value(exif: &exif::Exif) -> Option<u32> {
     uint_value(exif, Tag::PhotographicSensitivity).or_else(|| uint_value(exif, Tag::ISOSpeed))
 }
@@ -116,12 +87,6 @@ fn build_image(exif: &exif::Exif) -> ExifImage {
         orientacion: uint_value(exif, Tag::Orientation).map(|v| v as u16),
     }
 }
-
-/// Lee los metadatos EXIF de una imagen.
-///
-/// `Ok(Some(img))` si hay EXIF; `Ok(None)` si el archivo es de un tipo sin
-/// EXIF (PNG/BMP/WebP) o es un JPEG/TIFF sin bloque EXIF; `Err` si no se puede
-/// leer el archivo o su EXIF es corrupto.
 pub fn read_exif(path: &Path) -> Result<Option<ExifImage>> {
     if !is_exif_capable(path) {
         return Ok(None);
@@ -129,7 +94,6 @@ pub fn read_exif(path: &Path) -> Result<Option<ExifImage>> {
     let file = std::fs::File::open(path)?;
     let exif = match Reader::new().read_from_container(&mut std::io::BufReader::new(file)) {
         Ok(exif) => exif,
-        // JPEG/TIFF sin bloque APP1 → el crate reporta NotFound → "sin EXIF".
         Err(exif::Error::NotFound(_)) => return Ok(None),
         Err(other) => return Err(ShImagesError::Exif(other.to_string())),
     };

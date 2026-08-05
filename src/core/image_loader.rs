@@ -1,5 +1,3 @@
-//! Carga y decodificación síncrona de imágenes.
-
 use std::io::BufReader;
 use std::path::Path;
 use std::time::Duration;
@@ -11,24 +9,16 @@ use image::{
 };
 
 use crate::utils::errors::{Result, ShImagesError};
-
-/// Un frame de una imagen animada: buffer RGBA ya compuesto + retardo.
 #[derive(Debug)]
 pub struct AnimatedFrame {
     pub image: DynamicImage,
     pub delay: Duration,
 }
-
-/// Imagen animada (GIF): frames en orden de reproducción y duración total.
-///
-/// El loader garantiza `frames` no vacío y `total_duration > 0`.
 #[derive(Debug)]
 pub struct AnimatedImage {
     pub frames: Vec<AnimatedFrame>,
     pub total_duration: Duration,
 }
-
-/// Imagen decodificada: estática o animada.
 #[derive(Debug)]
 pub enum LoadedImage {
     Static(DynamicImage),
@@ -42,26 +32,18 @@ impl From<DynamicImage> for LoadedImage {
 }
 
 impl LoadedImage {
-    /// `true` si la imagen tiene animación (varios frames).
     pub fn is_animated(&self) -> bool {
         matches!(self, LoadedImage::Animated(_))
     }
-
-    /// Dimensiones de la imagen (las del primer frame; todos comparten tamaño).
     pub fn dimensions(&self) -> (u32, u32) {
         self.first_frame().dimensions()
     }
-
-    /// Primer frame (imagen completa para `Static`).
     pub fn first_frame(&self) -> &DynamicImage {
         match self {
             LoadedImage::Static(img) => img,
             LoadedImage::Animated(anim) => &anim.frames[0].image,
         }
     }
-
-    /// Índice del frame activo para `elapsed` (bucle infinito sobre la
-    /// duración total).
     pub fn frame_index_at(&self, elapsed: Duration) -> usize {
         match self {
             LoadedImage::Static(_) => 0,
@@ -81,17 +63,12 @@ impl LoadedImage {
             }
         }
     }
-
-    /// Imagen del frame activo para `elapsed`.
     pub fn frame_at(&self, elapsed: Duration) -> &DynamicImage {
         match self {
             LoadedImage::Static(img) => img,
             LoadedImage::Animated(anim) => &anim.frames[self.frame_index_at(elapsed)].image,
         }
     }
-
-    /// Tiempo restante hasta el próximo cambio de frame (para programar
-    /// repaints). En `Static` devuelve una hora (no hay animación).
     pub fn time_to_next_frame(&self, elapsed: Duration) -> Duration {
         match self {
             LoadedImage::Static(_) => Duration::from_secs(3600),
@@ -118,15 +95,7 @@ impl LoadedImage {
         }
     }
 }
-
-/// Retardo mínimo de un frame animado; evita busy-loop de repaint con delay 0.
 pub const MIN_FRAME_DELAY: Duration = Duration::from_millis(20);
-
-/// Carga y decodifica una imagen desde el filesystem.
-///
-/// Devuelve `LoadedImage::Static` para formatos sin animación (o un GIF de un
-/// solo frame) y `LoadedImage::Animated` para GIFs animados (frames ya
-/// compuestos con sus retardos).
 pub fn load_image(path: &Path) -> Result<LoadedImage> {
     let reader = ImageReader::open(path)?;
     let reader = reader.with_guessed_format()?;
@@ -136,15 +105,9 @@ pub fn load_image(path: &Path) -> Result<LoadedImage> {
     let image = reader.decode().map_err(map_image_error)?;
     Ok(LoadedImage::Static(image))
 }
-
-/// Decodifica un GIF animado completo.
-///
-/// Un GIF de un solo frame se devuelve como `Static` (no hay nada que animar).
 fn load_animated_gif(path: &Path) -> Result<LoadedImage> {
     let file = std::fs::File::open(path)?;
     let mut decoder = GifDecoder::new(BufReader::new(file)).map_err(map_image_error)?;
-    // Limita el tamaño de los buffers de frame; un GIF corrupto que declara
-    // dimensiones absurdas se rechaza rápido en vez de colgar el worker.
     decoder
         .set_limits(Limits::default())
         .map_err(map_image_error)?;
@@ -169,9 +132,6 @@ fn load_animated_gif(path: &Path) -> Result<LoadedImage> {
         }
     }
 }
-
-/// Clamp del retardo: un delay 0 (muy común en GIFs) no debe provocar un
-/// repaint por frame infinito.
 fn clamp_delay(d: Duration) -> Duration {
     if d < MIN_FRAME_DELAY {
         MIN_FRAME_DELAY
@@ -260,8 +220,6 @@ mod tests {
         let err = load_image(&path).unwrap_err();
         assert!(matches!(err, ShImagesError::UnsupportedFormat(_)));
     }
-
-    /// Genera un GIF animado sintético con `delays_ms` retardos por frame.
     fn make_animated_gif(dir: &Path, delays_ms: &[u64]) -> std::path::PathBuf {
         use image::codecs::gif::GifEncoder;
         use image::{Delay, Frame};

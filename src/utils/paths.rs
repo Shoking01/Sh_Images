@@ -1,19 +1,8 @@
-//! Resolución de rutas de configuración por plataforma.
-
 use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 
 use crate::utils::errors::{Result, ShImagesError};
-
-/// Resuelve el directorio raíz de configuración del usuario.
-///
-/// - Windows: `%APPDATA%`
-/// - macOS: `$HOME/Library/Application Support`
-/// - Linux: `$XDG_CONFIG_HOME` o, si no está definida, `$HOME/.config`
-///
-/// `None` o un valor vacío en `appdata`/`home`/`xdg` significa "env var no
-/// definida".
 fn config_dir_with(
     appdata: Option<&OsStr>,
     home: Option<&OsStr>,
@@ -24,7 +13,6 @@ fn config_dir_with(
 
     #[cfg(target_os = "windows")]
     {
-        // Los parámetros home/xdg no aplican en Windows.
         let _ = (home, xdg);
         let base = appdata
             .filter(|s| !s.is_empty())
@@ -33,7 +21,6 @@ fn config_dir_with(
     }
     #[cfg(target_os = "macos")]
     {
-        // Los parámetros appdata/xdg no aplican en macOS.
         let _ = (appdata, xdg);
         let base = home.ok_or_else(|| ShImagesError::Config("HOME is not set".to_string()))?;
         Ok(PathBuf::from(base)
@@ -42,7 +29,6 @@ fn config_dir_with(
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        // El parámetro appdata no aplica en Linux.
         let _ = appdata;
         if let Some(xdg) = xdg {
             return Ok(PathBuf::from(xdg));
@@ -51,8 +37,6 @@ fn config_dir_with(
         Ok(PathBuf::from(base).join(".config"))
     }
 }
-
-/// Directorio raíz de configuración resuelto desde el entorno real.
 pub fn config_dir() -> Result<PathBuf> {
     config_dir_with(
         std::env::var_os("APPDATA").as_deref(),
@@ -60,14 +44,9 @@ pub fn config_dir() -> Result<PathBuf> {
         std::env::var_os("XDG_CONFIG_HOME").as_deref(),
     )
 }
-
-/// Ruta del archivo de configuración dentro de un directorio raíz dado
-/// (`<config_dir>/sh_images/settings.toml`). Función pura para testear.
 pub fn settings_path_in(config_dir: &Path) -> PathBuf {
     config_dir.join("sh_images").join("settings.toml")
 }
-
-/// Ruta completa del archivo de configuración desde el entorno real.
 pub fn settings_path() -> Result<PathBuf> {
     Ok(settings_path_in(&config_dir()?))
 }

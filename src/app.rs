@@ -1,5 +1,3 @@
-//! Estado global de la aplicación y loop principal de `egui`.
-
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,11 +8,16 @@ use crate::core::exif::{read_exif, ExifRead};
 
 use eframe::egui;
 use image::DynamicImage;
+use image::GenericImageView;
+use image::ImageFormat;
 
 use crate::config::settings::Settings;
 use crate::core::actions::Action;
+use crate::core::edit_state::EditState;
+use crate::core::editor::{apply_all, apply_crop};
 use crate::core::image_cache::ImageCache;
 use crate::core::image_loader::load_image;
+use crate::core::lang::Language;
 use crate::core::navigation::{Navigation, SUPPORTED_EXTENSIONS};
 use crate::core::preload::{preload_targets, PRELOAD_DEPTH};
 use crate::core::shortcuts::ShortcutMap;
@@ -24,6 +27,7 @@ use crate::core::thumbnail_cache::ThumbnailCache;
 use crate::core::thumbnail_gen::{generate_thumbnail, THUMB_MAX};
 use crate::core::view::{Vec2, ViewTransform};
 use crate::ui::{
+    editor::{self},
     info_panel::{self, InfoPanelState},
     shortcut_dialog::ShortcutDialog,
     sidebar::SidebarState,
@@ -35,97 +39,56 @@ use crate::ui::{
 };
 use crate::utils::errors::Result;
 use crate::utils::paths::settings_path;
-
-/// Evento enviado por un thread worker al UI thread.
-///
-/// La imagen decodificada NO viaja por el canal: el worker la inserta en el
-/// cache y la UI la lee de ahí. El evento solo notifica el resultado del path.
 struct LoadEvent {
     path: PathBuf,
     result: Result<()>,
 }
 
-/// Estado de reproducción del GIF actual (None si la imagen es estática).
 struct AnimState {
     started: Instant,
     current_frame: usize,
 }
 
-/// Número de workers del pool de miniaturas (acotado, nunca un thread por imagen).
 const THUMB_POOL_SIZE: usize = 3;
-
-/// Estado global de la aplicación, creado una vez al arrancar.
-///
-/// `eframe` invoca [`eframe::App::ui`] en cada frame.
 pub struct ShImagesApp {
     settings: Settings,
-    /// Contexto de egui, clonado para `request_repaint` desde workers.
     ctx: egui::Context,
     navigation: Option<Navigation>,
     transform: ViewTransform,
     texture: Option<egui::TextureHandle>,
-    /// Cache LRU de imágenes decodificadas, compartido con los workers.
     cache: Arc<ImageCache>,
-    /// Paths con una carga en curso (deduplicación de workers).
     in_flight: Arc<Mutex<HashSet<PathBuf>>>,
-    /// Emisor del canal único (clonado a cada worker).
     tx: mpsc::Sender<LoadEvent>,
-    /// Receptor persistente del canal único.
     rx: Option<mpsc::Receiver<LoadEvent>>,
     toasts: Toasts,
-    /// `true` si el usuario ha hecho zoom con la imagen actual.
     user_interacted: bool,
-    /// Último tamaño del canvas; se usa para re-fitear al redimensionar.
     last_viewport: Option<Vec2>,
-    /// Último path aplicado a la textura; evita re-aplicar un evento duplicado.
     last_applied: Option<PathBuf>,
-    /// Cache en memoria de miniaturas, compartido con el pool de workers.
     thumb_cache: Arc<ThumbnailCache>,
-    /// Cola FIFO de paths a miniaturizar (la UI encola, los workers consumen).
     thumb_queue: ThumbQueue,
-    /// Receptor de notificaciones de "miniatura lista" (solo dispara repaint).
     thumb_events_rx: Option<mpsc::Receiver<()>>,
-    /// Estado del sidebar (visible + texturas GPU).
     sidebar: SidebarState,
-    /// Generación de la carpeta abierta; los workers descartan miniaturas de
-    /// generaciones anteriores (para no rellenar el cache tras `clear`).
     thumb_epoch: Arc<AtomicU64>,
-    /// Atajos de teclado configurables (desde settings, editables en UI).
     shortcuts: ShortcutMap,
-    /// Si la ventana está en pantalla completa.
     is_fullscreen: bool,
-    /// Dialog de configuración de atajos.
     shortcut_dialog: ShortcutDialog,
-    /// Tamaño en disco cacheado por path (evita `fs::metadata` por frame).
     size_for: Option<(PathBuf, u64)>,
-    /// Cache de EXIF por path (se limpia al abrir una carpeta).
     exif_cache: Arc<Mutex<HashMap<PathBuf, ExifRead>>>,
-    /// Emisor de peticiones de EXIF (UI → worker).
     exif_tx: mpsc::Sender<PathBuf>,
-    /// Receptor de avisos "EXIF listo" (solo dispara repaint).
     exif_rx: Option<mpsc::Receiver<()>>,
-    /// Estado del panel derecho de info.
     info_panel: InfoPanelState,
-    /// Estado de reproducción de la animación del GIF actual.
     anim: Option<AnimState>,
-    /// Si el slideshow automático está activo.
     slideshow_active: bool,
-    /// Intervalo actual del slideshow.
     slideshow_interval: Duration,
-    /// Última vez que el slideshow avanzó de imagen.
     slideshow_last_advance: Instant,
-    /// Path recibido por CLI al arranque; se abre en el primer frame.
     pending_initial: Option<PathBuf>,
+    default_viewer_dialog: bool,
+    edit_state: Option<EditState>,
+    edit_source_path: Option<PathBuf>,
+    edit_texture: Option<egui::TextureHandle>,
 }
 
 impl ShImagesApp {
-    /// Crea el estado de la app cargando la configuración del usuario.
-    ///
-    /// Si la configuración no puede cargarse, se usan los defaults y se loguea
-    /// un warning; la app nunca aborta el arranque por esto.
-    ///
-    /// `initial_path`: si proviene de CLI (`sh_images.exe <path>`), se abre
-    /// directamente en el primer frame; si `None`, el usuario abre vía diálogo.
     pub fn new(cc: &eframe::CreationContext<'_>, initial_path: Option<PathBuf>) -> Self {
         let settings = match settings_path().and_then(|path| Settings::load(&path)) {
             Ok(settings) => settings,
@@ -227,27 +190,21 @@ impl ShImagesApp {
             slideshow_interval,
             slideshow_last_advance: Instant::now(),
             pending_initial: initial_path,
+            default_viewer_dialog: false,
+            edit_state: None,
+            edit_source_path: None,
+            edit_texture: None,
         }
     }
 
-    /// Carga la configuración y devuelve un error tipado si falla.
-    ///
-    /// Expuesta para que los tests de integración puedan verificar el ciclo
-    /// de vida completo sin arrancar una ventana.
     pub fn load_settings() -> Result<Settings> {
         settings_path().and_then(|path| Settings::load(&path))
     }
 
-    /// Guard del set de paths en carga, recuperándose de un lock envenenado.
     fn in_flight_guard(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
         self.in_flight.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// Abre el diálogo nativo y, si hay elección, carga la imagen.
-    ///
-    /// El tiempo de egui se re-lee tras el diálogo (que es bloqueante): usar
-    /// el tiempo del frame en que se abrió haría que un toast emitido ahora
-    /// expirara al instante si el diálogo estuvo abierto más de 3 segundos.
     fn open_dialog(&mut self) {
         let picked = rfd::FileDialog::new()
             .add_filter("Imágenes", SUPPORTED_EXTENSIONS)
@@ -258,7 +215,6 @@ impl ShImagesApp {
         }
     }
 
-    /// Abre `path`: construye la navegación de su carpeta y dispara la carga.
     fn open_path(&mut self, path: PathBuf, t: f64) {
         match Navigation::from_folder(&path, SUPPORTED_EXTENSIONS) {
             Ok(nav) => {
@@ -266,10 +222,6 @@ impl ShImagesApp {
                 self.thumb_epoch.fetch_add(1, Ordering::Relaxed);
                 self.thumb_cache.clear();
                 self.sidebar.clear_textures();
-                // Descarta los paths de la carpeta anterior aún en cola: el epoch
-                // cubre a los workers que decodifican en vuelo, pero sin este
-                // drenado cada worker consumiría (y descartaría) un path obsoleto
-                // antes de llegar a los nuevos.
                 self.thumb_queue.drain();
                 self.exif_cache
                     .lock()
@@ -289,11 +241,6 @@ impl ShImagesApp {
         }
     }
 
-    /// Carga `path` de la forma más rápida posible:
-    ///
-    /// 1. Cache hit → textura inmediata + pre-carga (sin thread).
-    /// 2. In-flight → no-op (un worker ya lo está cargando).
-    /// 3. Miss → spawn worker que decodifica, cachea y notifica.
     fn start_load(&mut self, path: PathBuf) {
         if let Some((texture, image_size)) = self.texture_from_cache(&path) {
             tracing::info!(path = %path.display(), "image loaded from cache");
@@ -307,11 +254,6 @@ impl ShImagesApp {
         self.spawn_load(path, false);
     }
 
-    /// Construye la textura desde el cache si `path` está presente.
-    ///
-    /// Devuelve `(textura, tamaño de imagen)` con el guard del cache ya soltado
-    /// (la `CacheEntryRef` se cae al final de la llamada), para que el caller
-    /// pueda mutar `self` libremente después.
     fn texture_from_cache(&self, path: &std::path::Path) -> Option<(egui::TextureHandle, Vec2)> {
         let entry = self.cache.get(path)?;
         let texture = make_texture(&self.ctx, entry.first_frame());
@@ -319,12 +261,6 @@ impl ShImagesApp {
         Some((texture, Vec2::new(size.0 as f32, size.1 as f32)))
     }
 
-    /// Aplica una imagen decodificada al estado: textura, transform en fit y
-    /// dispara la pre-carga de N±1.
-    ///
-    /// Marca `path` como el último aplicado para que `poll_loader` pueda
-    /// descartar un evento Ok duplicado (e.g. pre-carga de N+1 que llegó tarde
-    /// cuando N+1 ya es la imagen actual) sin pisar el estado del usuario.
     fn apply_decoded(
         &mut self,
         path: &std::path::Path,
@@ -353,12 +289,6 @@ impl ShImagesApp {
         };
     }
 
-    /// Spawnea un worker que decodifica `path`, lo inserta en el cache y envía
-    /// un evento ligero por el canal único.
-    ///
-    /// `is_preload` solo cambia el nivel de log (DEBUG vs INFO): la lógica del
-    /// worker es idéntica. El flag no genera toasts de error — eso lo decide el
-    /// check `is_current` en `poll_loader`.
     fn spawn_load(&self, path: PathBuf, is_preload: bool) {
         if is_preload {
             tracing::debug!(path = %path.display(), "preloading image");
@@ -385,10 +315,6 @@ impl ShImagesApp {
         });
     }
 
-    /// Drena el canal único; solo actúa sobre el path actual.
-    ///
-    /// Los eventos de pre-carga obsoletos (path distinto del actual) se ignoran
-    /// silenciosamente: el único efecto que tenían era poblar el cache.
     fn poll_loader(&mut self, t: f64) {
         let Some(rx) = self.rx.take() else { return };
         while let Ok(event) = rx.try_recv() {
@@ -434,11 +360,6 @@ impl ShImagesApp {
         }
         self.rx = Some(rx);
     }
-
-    /// Drena las notificaciones de miniaturas y dispara un repaint si hubo.
-    ///
-    /// La UI no necesita el contenido del evento: lee `thumb_cache` directamente
-    /// en el frame siguiente.
     fn poll_thumbnails(&mut self) {
         let Some(rx) = self.thumb_events_rx.take() else {
             return;
@@ -452,8 +373,6 @@ impl ShImagesApp {
             self.ctx.request_repaint();
         }
     }
-
-    /// Encolar una petición de EXIF para `path` si aún no está cacheado.
     fn request_exif(&self, path: &Path) {
         let present = self
             .exif_cache
@@ -465,8 +384,6 @@ impl ShImagesApp {
         }
         let _ = self.exif_tx.send(path.to_path_buf());
     }
-
-    /// Drena las señales "EXIF listo" y hace repaint para repintar el panel.
     fn poll_exif(&mut self) {
         let Some(rx) = self.exif_rx.take() else {
             return;
@@ -480,9 +397,6 @@ impl ShImagesApp {
             self.ctx.request_repaint();
         }
     }
-
-    /// Avanza el GIF actual: reconstruye la textura cuando cambia el frame
-    /// activo y programa el repaint para el próximo cambio.
     fn tick_animation(&mut self) {
         let Some(anim) = self.anim.as_mut() else {
             return;
@@ -510,8 +424,6 @@ impl ShImagesApp {
         let wait = entry.time_to_next_frame(elapsed);
         self.ctx.request_repaint_after(wait);
     }
-
-    /// Salta a la imagen `index` de la carpeta (click en una miniatura).
     fn navigate_to(&mut self, index: usize) {
         self.pause_slideshow();
         let Some(nav) = &mut self.navigation else {
@@ -525,21 +437,15 @@ impl ShImagesApp {
             self.start_load(path);
         }
     }
-
-    /// Alterna la visibilidad del sidebar.
     fn toggle_sidebar(&mut self) {
         self.sidebar.show = !self.sidebar.show;
     }
-
-    /// Alterna el slideshow y reinicia su contador.
     fn toggle_slideshow(&mut self) {
         self.slideshow_active = !self.slideshow_active;
         self.slideshow_last_advance = Instant::now();
         self.ctx.request_repaint();
         tracing::info!(active = self.slideshow_active, "slideshow toggled");
     }
-
-    /// Ajusta la velocidad del slideshow y persiste el intervalo.
     fn change_slideshow_speed(&mut self, faster: bool) {
         self.slideshow_interval = if faster {
             slideshow::faster(self.slideshow_interval)
@@ -558,8 +464,6 @@ impl ShImagesApp {
             "slideshow speed changed"
         );
     }
-
-    /// Avanza una imagen sin pausar el slideshow (auto-avance).
     fn advance_slideshow(&mut self) {
         self.slideshow_last_advance = Instant::now();
         if let Some(nav) = &mut self.navigation {
@@ -569,16 +473,12 @@ impl ShImagesApp {
             }
         }
     }
-
-    /// Detiene el slideshow por interacción manual del usuario.
     fn pause_slideshow(&mut self) {
         if self.slideshow_active {
             self.slideshow_active = false;
             tracing::info!("slideshow paused by user interaction");
         }
     }
-
-    /// Dispara la pre-carga de N±1 usando `preload_targets`.
     fn preload_neighbors(&self) {
         let Some(nav) = &self.navigation else { return };
         let targets = preload_targets(
@@ -591,8 +491,6 @@ impl ShImagesApp {
             self.spawn_load(path, true);
         }
     }
-
-    /// Navega `dir` pasos (-1 prev, +1 next) y carga la nueva imagen.
     fn navigate(&mut self, dir: isize) {
         let Some(nav) = &mut self.navigation else {
             return;
@@ -606,11 +504,6 @@ impl ShImagesApp {
             self.start_load(path);
         }
     }
-
-    /// Atajos de teclado configurables vía `ShortcutMap`.
-    ///
-    /// Esc siempre sale del fullscreen (comportamiento de sistema, no remapeable).
-    /// Si el dialog de atajos está abierto o hay foco de texto, no se disparan.
     fn handle_shortcuts(&mut self, ui: &mut egui::Ui) {
         if self.is_fullscreen
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
@@ -636,9 +529,6 @@ impl ShImagesApp {
             self.dispatch(action);
         }
     }
-
-    /// Ejecuta una acción: único punto por el que toolbar, menú y atajos
-    /// disparan efectos en la app.
     fn dispatch(&mut self, action: Action) {
         match action {
             Action::Open => self.open_dialog(),
@@ -666,10 +556,176 @@ impl ShImagesApp {
             Action::SlideshowFaster => self.change_slideshow_speed(true),
             Action::SlideshowSlower => self.change_slideshow_speed(false),
             Action::EditShortcuts => self.shortcut_dialog.open = true,
+            Action::SetDefaultViewer => self.default_viewer_dialog = true,
+            Action::Edit => self.enter_edit_mode(),
+            Action::SaveCopy => self.save_edit_copy(false),
+            Action::SaveAs => self.save_edit_copy(true),
+            Action::CancelEdit => self.exit_edit_mode(),
+            Action::ResetEdit => self.reset_edit(),
+            Action::ApplyCrop => self.apply_crop_edit(),
+            Action::SetLangEs => self.set_language(Language::Es),
+            Action::SetLangEn => self.set_language(Language::En),
         }
     }
+    fn set_language(&mut self, lang: Language) {
+        self.settings.language = lang;
+        if let Ok(path) = settings_path() {
+            if let Err(e) = self.settings.save(&path) {
+                tracing::warn!(error = %e, "failed to persist language");
+            }
+        }
+        tracing::info!(language = ?lang, "language changed");
+    }
+    fn set_default_viewer(&mut self) {
+        let t = self.ctx.input(|i| i.time);
+        let tr = self.settings.language.translations();
+        match crate::utils::default_app::set_as_default_image_viewer() {
+            Ok(()) => self.toasts.push(tr.default_viewer_success.to_string(), t),
+            Err(e) => self
+                .toasts
+                .push(format!("{} {e}", tr.default_viewer_error), t),
+        }
+    }
+    fn enter_edit_mode(&mut self) {
+        let Some(path) = self
+            .navigation
+            .as_ref()
+            .and_then(|n| n.current_path())
+            .cloned()
+        else {
+            return;
+        };
+        let Some(entry) = self.cache.get(&path) else {
+            let tr = self.settings.language.translations();
+            self.toasts
+                .push(tr.load_error.to_string(), self.ctx.input(|i| i.time));
+            return;
+        };
+        let image = entry.first_frame().clone();
+        self.edit_state = Some(EditState::new(image));
+        self.edit_source_path = Some(path);
+        self.edit_texture = None;
+        if let Some(ref p) = self.edit_source_path {
+            tracing::info!("entered edit mode for {}", p.display());
+        }
+    }
+    fn exit_edit_mode(&mut self) {
+        self.edit_state = None;
+        self.edit_source_path = None;
+        self.edit_texture = None;
+        tracing::info!("exited edit mode");
+    }
+    fn save_edit_copy(&mut self, choose_path: bool) {
+        let Some(state) = &self.edit_state else {
+            return;
+        };
+        let Some(ref source_path) = self.edit_source_path else {
+            return;
+        };
+        let final_image = apply_all(
+            &state.original,
+            state.crop_rect,
+            state.filter,
+            state.brightness,
+            state.contrast,
+            state.saturation,
+        );
 
-    /// Rota la imagen actual 90° (CW si `cw`, CCW si no) y re-aplica fit.
+        let save_path = if choose_path {
+            let suggested = source_path
+                .file_stem()
+                .map(|s| format!("{}_edit", s.to_string_lossy()))
+                .unwrap_or_else(|| "imagen_editada".to_string());
+            rfd::FileDialog::new()
+                .set_file_name(&suggested)
+                .add_filter("PNG", &["png"])
+                .add_filter("JPEG", &["jpg"])
+                .add_filter("BMP", &["bmp"])
+                .add_filter("WebP", &["webp"])
+                .save_file()
+        } else {
+            let stem = source_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "imagen".to_string());
+            let ext = source_path
+                .extension()
+                .map(|e| e.to_string_lossy().to_string())
+                .unwrap_or_else(|| "png".to_string());
+            let parent = source_path.parent().unwrap_or(std::path::Path::new(""));
+            Some(parent.join(format!("{}_edit.{}", stem, ext)))
+        };
+
+        if let Some(path) = save_path {
+            let format = guess_format(&path);
+            let result = match format {
+                ImageFormat::Jpeg => final_image
+                    .to_rgb8()
+                    .save_with_format(&path, ImageFormat::Jpeg),
+                ImageFormat::Bmp => final_image
+                    .to_rgb8()
+                    .save_with_format(&path, ImageFormat::Bmp),
+                _ => final_image.save(&path),
+            };
+            let t = self.ctx.input(|i| i.time);
+            let tr = self.settings.language.translations();
+            match result {
+                Ok(()) => {
+                    tracing::info!(path = %path.display(), "saved edited image");
+                    self.toasts
+                        .push(format!("{} {}", tr.save_success, path.display()), t);
+                    self.exit_edit_mode();
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to save edited image");
+                    self.toasts.push(format!("{} {e}", tr.save_error), t);
+                }
+            }
+        }
+    }
+    fn reset_edit(&mut self) {
+        let Some(state) = &mut self.edit_state else {
+            return;
+        };
+        state.reset();
+        self.edit_texture = None;
+    }
+    fn apply_crop_edit(&mut self) {
+        let Some(state) = &mut self.edit_state else {
+            return;
+        };
+        let Some(rect) = state.crop_rect else {
+            return;
+        };
+        let cropped = apply_crop(&state.original, rect);
+        state.original = cropped.clone();
+        state.working = cropped;
+        state.crop_rect = None;
+        state.filter = None;
+        state.brightness = 0;
+        state.contrast = 0;
+        state.saturation = 0;
+        self.edit_texture = None;
+    }
+    fn update_edit_texture(&mut self) {
+        let Some(state) = &self.edit_state else {
+            return;
+        };
+        let preview = apply_all(
+            &state.original,
+            None,
+            state.filter,
+            state.brightness,
+            state.contrast,
+            state.saturation,
+        );
+        self.edit_texture = Some(make_texture(&self.ctx, &preview));
+        let dims = preview.dimensions();
+        self.transform = ViewTransform::new(
+            Vec2::new(dims.0 as f32, dims.1 as f32),
+            self.transform.viewport,
+        );
+    }
     fn rotate_image(&mut self, cw: bool) {
         if self.texture.is_none() {
             return;
@@ -681,16 +737,12 @@ impl ShImagesApp {
         }
         self.user_interacted = false;
     }
-
-    /// Alterna el fullscreen nativo del viewport.
     fn toggle_fullscreen(&mut self) {
         self.is_fullscreen = !self.is_fullscreen;
         self.ctx
             .send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
         tracing::info!(fullscreen = self.is_fullscreen, "toggled fullscreen");
     }
-
-    /// Alterna el tema y lo persiste en disco.
     fn toggle_theme(&mut self) {
         self.settings.theme = theme::toggle(&self.settings.theme).to_string();
         if let Ok(path) = settings_path() {
@@ -700,8 +752,6 @@ impl ShImagesApp {
         }
         tracing::info!(theme = %self.settings.theme, "theme toggled");
     }
-
-    /// Construye la info de la imagen actual para la status bar.
     fn current_status_info(&mut self) -> Option<StatusInfo> {
         let nav = self.navigation.as_ref()?;
         let path = nav.current_path()?;
@@ -723,23 +773,86 @@ impl ShImagesApp {
             total: nav.images.len(),
         })
     }
-}
+    fn show_default_viewer_dialog(&mut self, ui: &mut egui::Ui) {
+        let mut confirmed = false;
+        let mut cancelled = false;
+        let tr = self.settings.language.translations();
 
-/// Convierte una imagen decodificada en textura de egui.
+        egui::Window::new(tr.default_viewer_dialog_title)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ui.ctx(), |ui| {
+                ui.label(tr.default_viewer_dialog_body);
+                ui.add_space(8.0);
+                ui.label(tr.default_viewer_dialog_formats);
+                ui.indent("formatos", |ui| {
+                    let exts = crate::utils::default_app::associated_extensions();
+                    let per_row = 5;
+                    let rows = exts.len().div_ceil(per_row);
+                    for row in 0..rows {
+                        ui.horizontal(|ui| {
+                            for col in 0..per_row {
+                                let idx = row * per_row + col;
+                                if idx < exts.len() {
+                                    ui.monospace(exts[idx]);
+                                }
+                            }
+                        });
+                    }
+                });
+                ui.add_space(12.0);
+                ui.label(tr.default_viewer_dialog_continue);
+                ui.add_space(16.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button(tr.continue_btn).clicked() {
+                        confirmed = true;
+                    }
+                    if ui.button(tr.cancel).clicked() {
+                        cancelled = true;
+                    }
+                });
+            });
+
+        if confirmed {
+            self.default_viewer_dialog = false;
+            self.set_default_viewer();
+        }
+        if cancelled {
+            self.default_viewer_dialog = false;
+        }
+    }
+}
 fn make_texture(ctx: &egui::Context, image: &DynamicImage) -> egui::TextureHandle {
     let size = [image.width() as usize, image.height() as usize];
     let rgba = image.to_rgba8();
     let color_image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
     ctx.load_texture("image", color_image, egui::TextureOptions::LINEAR)
 }
+fn guess_format(path: &Path) -> ImageFormat {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "jpg" | "jpeg" => ImageFormat::Jpeg,
+        "bmp" => ImageFormat::Bmp,
+        "gif" => ImageFormat::Gif,
+        "tiff" | "tif" => ImageFormat::Tiff,
+        "webp" => ImageFormat::WebP,
+        "avif" => ImageFormat::Avif,
+        _ => ImageFormat::Png,
+    }
+}
 
 impl eframe::App for ShImagesApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         theme::apply(ui.ctx(), &self.settings.theme);
         let t = ui.input(|i| i.time);
-
-        // Al arranque, abrir el path de CLI si lo hay (solo el primer frame
-        // en que navigation aún no está inicializada).
+        ui.ctx()
+            .data_mut(|d| d.insert_temp("app_lang".into(), self.settings.language));
         if self.navigation.is_none() {
             if let Some(path) = self.pending_initial.take() {
                 tracing::info!(path = %path.display(), "opening CLI path");
@@ -761,20 +874,17 @@ impl eframe::App for ShImagesApp {
             }
             self.ctx.request_repaint_after(self.slideshow_interval);
         }
-
-        // Toolbar superior (acciones de la app).
         let action = toolbar::show(
             ui,
             &self.shortcuts,
             &self.settings.theme,
             self.is_fullscreen,
             self.slideshow_active,
+            self.settings.language,
         );
         if let Some(action) = action {
             self.dispatch(action);
         }
-
-        // Status bar inferior (info de la imagen actual).
         if self.texture.is_some() {
             if let Some(info) = self.current_status_info() {
                 statusbar::show(ui, &info);
@@ -808,17 +918,26 @@ impl eframe::App for ShImagesApp {
                     }
                 });
                 ui.menu_button("Ver", |ui| {
-                    if ui.button(Action::ToggleSidebar.label()).clicked() {
+                    if ui
+                        .button(Action::ToggleSidebar.label(self.settings.language))
+                        .clicked()
+                    {
                         ui.close();
                         self.dispatch(Action::ToggleSidebar);
                     }
-                    if ui.button(Action::Fullscreen.label()).clicked() {
+                    if ui
+                        .button(Action::Fullscreen.label(self.settings.language))
+                        .clicked()
+                    {
                         ui.close();
                         self.dispatch(Action::Fullscreen);
                     }
                 });
                 ui.menu_button("Ayuda", |ui| {
-                    if ui.button(Action::EditShortcuts.label()).clicked() {
+                    if ui
+                        .button(Action::EditShortcuts.label(self.settings.language))
+                        .clicked()
+                    {
                         ui.close();
                         self.dispatch(Action::EditShortcuts);
                     }
@@ -827,27 +946,79 @@ impl eframe::App for ShImagesApp {
             if want_open {
                 self.open_dialog();
             }
-
-            match &self.texture {
-                Some(texture) => {
-                    let resp = viewer::show(ui, texture, &mut self.transform);
-                    if resp.zoomed {
+            if self.edit_state.is_some() {
+                self.update_edit_texture();
+                if let Some(edit_state) = &mut self.edit_state {
+                    let editor_resp = editor::show(ui.ctx(), edit_state);
+                    if editor_resp.start_crop {
+                        if let Some(state) = &mut self.edit_state {
+                            state.crop_mode = true;
+                            state.crop_rect = None;
+                        }
+                    } else if editor_resp.apply_crop {
+                        if let Some((x, y, w, h)) = viewer::get_crop_result(ui.ctx()) {
+                            if let Some(state) = &mut self.edit_state {
+                                state.crop_rect =
+                                    Some(crate::core::edit_state::CropRect { x, y, w, h });
+                                state.crop_mode = false;
+                            }
+                        } else {
+                            self.apply_crop_edit();
+                        }
+                    } else if editor_resp.cancel_crop {
+                        if let Some(state) = &mut self.edit_state {
+                            state.crop_rect = None;
+                            state.crop_mode = false;
+                        }
+                    } else if editor_resp.save {
+                        self.save_edit_copy(false);
+                    } else if editor_resp.save_as {
+                        self.save_edit_copy(true);
+                    } else if editor_resp.cancel {
+                        self.exit_edit_mode();
+                    } else if editor_resp.reset {
+                        self.reset_edit();
+                    }
+                }
+                if let Some(ref tex) = self.edit_texture {
+                    let crop_mode = self.edit_state.as_ref().is_some_and(|s| s.crop_mode);
+                    let crop_selection = if crop_mode {
+                        viewer::get_crop_selection(ui.ctx())
+                    } else {
+                        None
+                    };
+                    let resp = viewer::show_editable(
+                        ui,
+                        tex,
+                        &mut self.transform,
+                        crop_mode,
+                        crop_selection,
+                    );
+                    if resp.zoomed || resp.panned {
                         self.user_interacted = true;
                         self.pause_slideshow();
                     }
-                    // Auto-fit: al cargar (viewport recién conocido) y al
-                    // redimensionar mientras el usuario no haya interactuado.
-                    let viewport = self.transform.viewport;
-                    if !self.user_interacted && self.last_viewport != Some(viewport) {
-                        self.transform.fit();
-                        self.last_viewport = Some(viewport);
-                    }
                 }
-                None => {
-                    ui.centered_and_justified(|ui| {
-                        ui.heading("Sh_Images");
-                        ui.label("Archivo → Abrir… o Ctrl+O");
-                    });
+            } else {
+                match &self.texture {
+                    Some(texture) => {
+                        let resp = viewer::show(ui, texture, &mut self.transform);
+                        if resp.zoomed || resp.panned {
+                            self.user_interacted = true;
+                            self.pause_slideshow();
+                        }
+                        let viewport = self.transform.viewport;
+                        if !self.user_interacted && self.last_viewport != Some(viewport) {
+                            self.transform.fit();
+                            self.last_viewport = Some(viewport);
+                        }
+                    }
+                    None => {
+                        ui.centered_and_justified(|ui| {
+                            ui.heading("Sh_Images");
+                            ui.label("Archivo → Abrir… o Ctrl+O");
+                        });
+                    }
                 }
             }
         });
@@ -856,7 +1027,9 @@ impl eframe::App for ShImagesApp {
         self.toasts.show(ui);
 
         if self.shortcut_dialog.open {
-            let changed = self.shortcut_dialog.show(ui, &mut self.shortcuts);
+            let changed =
+                self.shortcut_dialog
+                    .show(ui, &mut self.shortcuts, self.settings.language);
             if changed {
                 if let Ok(path) = settings_path() {
                     if let Err(e) = self.settings.save(&path) {
@@ -864,6 +1037,10 @@ impl eframe::App for ShImagesApp {
                     }
                 }
             }
+        }
+
+        if self.default_viewer_dialog {
+            self.show_default_viewer_dialog(ui);
         }
 
         self.handle_shortcuts(ui);

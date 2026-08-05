@@ -1,19 +1,5 @@
-//! Generación de miniaturas: downscale puro sin I/O ni threads.
-//!
-//! `core/` no depende de `egui` (AGENTS.md §3.2). La `DynamicImage` viene del
-//! crate `image`, ya presente.
-
 use image::{DynamicImage, GenericImageView};
-
-/// Tamaño por defecto del lado mayor de una miniatura (px).
 pub const THUMB_MAX: u32 = 96;
-
-/// Devuelve el tamaño de miniatura manteniendo el aspect ratio.
-///
-/// Nunca amplía: si la imagen ya cabe en `max`, devuelve las dimensiones
-/// originales. `(0, 0)` si `max`, `w` o `h` es `0`.
-///
-/// Se calcula en `f64` para evitar overflow en dimensiones grandes.
 pub fn thumbnail_size(w: u32, h: u32, max: u32) -> (u32, u32) {
     if max == 0 || w == 0 || h == 0 {
         return (0, 0);
@@ -28,11 +14,6 @@ pub fn thumbnail_size(w: u32, h: u32, max: u32) -> (u32, u32) {
     let nh = (h * scale).round() as u32;
     (nw.max(1), nh.max(1))
 }
-
-/// Genera una miniatura de `image` con el lado mayor = `max`.
-///
-/// Con `max == 0` devuelve la imagen original sin modificar: `DynamicImage::thumbnail`
-/// con dimensión 0 no está definida y podría panic. Igual si la imagen ya cabe.
 pub fn generate_thumbnail(image: &DynamicImage, max: u32) -> DynamicImage {
     let (w, h) = image.dimensions();
     let (nw, nh) = thumbnail_size(w, h, max);
