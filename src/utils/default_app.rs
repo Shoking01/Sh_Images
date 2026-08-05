@@ -1,10 +1,13 @@
+#[cfg(target_os = "windows")]
 use std::path::Path;
 
 use crate::utils::errors::{Result, ShImagesError};
 pub(crate) const ASSOCIATED_EXTENSIONS: &[&str] = &[
-    ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tiff", ".tif", ".avif",
+    ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tiff", ".tif", ".aiif",
 ];
+#[cfg(target_os = "windows")]
 const PROG_ID: &str = "ShImages.ImageViewer";
+#[cfg(target_os = "windows")]
 const PROG_ID_FRIENDLY: &str = "Sh_Images Image Viewer";
 pub fn set_as_default_image_viewer() -> Result<()> {
     #[cfg(target_os = "windows")]
@@ -134,6 +137,7 @@ mod tests {
         assert!(ASSOCIATED_EXTENSIONS.contains(&".webp"));
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn prog_id_is_valid() {
         assert!(!PROG_ID.is_empty());
