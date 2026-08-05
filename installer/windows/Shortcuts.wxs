@@ -2,30 +2,34 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <!--
     Shortcuts.wxs — acceso directo en Menú Inicio.
-    Se instala en ProgramMenuFolder\Sh_Images\
+    Se instala en ProgramMenuFolder\Sh_Images\.
+
+    Shortcut NO anunciado (Advertise="no"): apunta directamente al .exe con
+    Target="[INSTALLFOLDER]sh_images.exe". Un componente con clave en
+    HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\Sh_Images
+    sirve como KeyPath (perMachine).
   -->
   <Fragment>
-    <DirectoryRef Id="ProgramMenuFolder">
-      <Directory Id="AppMenuFolder" Name="Sh_Images" />
+    <DirectoryRef Id="AppMenuFolder">
+      <Component Id="StartMenuShortcuts" Guid="E6F8A0B1-C2D3-4E5F-9A8B-0C1D2E3F4A5B">
+        <Shortcut
+          Id="StartMenuShortcut"
+          Name="Sh_Images"
+          Description="Sh_Images visor de imágenes nativo en Rust"
+          Target="[INSTALLFOLDER]sh_images.exe"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="AppIcon" />
+        <RemoveFolder
+          Id="RemoveAppMenuFolder"
+          Directory="AppMenuFolder"
+          On="uninstall" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\Sh_Images\StartMenuShortcut"
+          Type="string"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
     </DirectoryRef>
-
-    <Component Id="StartMenuShortcuts" Guid="E6F8A0B1-C2D3-4E5F-9A8B-0C1D2E3F4A5B">
-      <Shortcut
-        Id="StartMenuShortcut"
-        Name="Sh_Images"
-        WorkingDirectory="INSTALLFOLDER"
-        Icon="AppIcon"
-        Advertise="yes" />
-      <RemoveFolder
-        Id="RemoveAppMenuFolder"
-        Directory="AppMenuFolder"
-        On="uninstall" />
-      <RegistryValue
-        Root="HKLM"
-        Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\Sh_Images"
-        Type="string"
-        Value="Sh_Images visor de imágenes nativo en Rust"
-        KeyPath="yes" />
-    </Component>
   </Fragment>
 </Wix>

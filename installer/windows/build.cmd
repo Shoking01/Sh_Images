@@ -20,6 +20,9 @@ if not exist "%WIXDIR%\candle.exe" (
 
 REM --- Version ---
 if "%VERSION%"=="" set "VERSION=0.1.0"
+REM Si la versión viene con prefijo "v" (p.ej. v1.0.0), lo quitamos para
+REM que Product/@Version sea un valor válido (x.x.x) y el nombre MSI sea limpio.
+if "%VERSION:~0,1%"=="v" set "VERSION=%VERSION:~1%"
 
 REM --- Release dir ---
 if "%RELEASE_DIR%"=="" set "RELEASE_DIR=..\..\target\release"
@@ -42,7 +45,7 @@ REM --- Compile .wxs to .wixobj ---
 "%WIXDIR%\candle.exe" ^
     -arch x64 ^
     -dVersion=%VERSION% ^
-    -dReleaseDir="%RELEASE_DIR%\" ^
+    -dReleaseDir=%RELEASE_DIR% ^
     -ext WixUtilExtension ^
     -out Product.wixobj Product.wxs
 
@@ -54,7 +57,7 @@ if %ERRORLEVEL% NEQ 0 (
 "%WIXDIR%\candle.exe" ^
     -arch x64 ^
     -dVersion=%VERSION% ^
-    -dReleaseDir="%RELEASE_DIR%\" ^
+    -dReleaseDir=%RELEASE_DIR% ^
     -out Files.wixobj Files.wxs
 
 if %ERRORLEVEL% NEQ 0 (
@@ -65,7 +68,7 @@ if %ERRORLEVEL% NEQ 0 (
 "%WIXDIR%\candle.exe" ^
     -arch x64 ^
     -dVersion=%VERSION% ^
-    -dReleaseDir="%RELEASE_DIR%\" ^
+    -dReleaseDir=%RELEASE_DIR% ^
     -out Associations.wixobj Associations.wxs
 
 if %ERRORLEVEL% NEQ 0 (
@@ -90,7 +93,7 @@ set "MSI_NAME=sh_images-%VERSION%-x64.msi"
     -ext WixUIExtension ^
     -ext WixUtilExtension ^
     -b . ^
-    -O1
+    -sice:ICE69
 
 if %ERRORLEVEL% NEQ 0 (
     echo ERROR: light fallo al generar %MSI_NAME%

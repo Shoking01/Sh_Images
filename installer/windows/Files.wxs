@@ -6,7 +6,7 @@
   <Fragment>
     <DirectoryRef Id="INSTALLFOLDER">
       <Component Id="AppComponents" Guid="B2C4D6E8-F1A3-4B5C-9D8E-0F1E2D3C4B5A">
-        <File Id="ShImagesExe" Source="$(var.ReleaseDir)sh_images.exe" KeyPath="yes" />
+        <File Id="ShImagesExe" Source="$(var.ReleaseDir)\sh_images.exe" KeyPath="yes" />
         <File Id="AppIconFile" Source="icon.ico" />
       </Component>
     </DirectoryRef>

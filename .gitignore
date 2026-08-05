@@ -6,6 +6,11 @@ Cargo.lock.orig
 /.superpowers/
 # Icono generado por build.rs (build-time artifact, no commitear)
 installer/windows/icon.ico
+# Artefactos del instalador WiX (output de build.cmd)
+installer/windows/*.wixobj
+installer/windows/*.wixpdb
+installer/windows/*.msi
+installer/windows/cab*.cab
 /AGENTS.md
 /Plan.md
 /docs/

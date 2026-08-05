@@ -31,6 +31,9 @@
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="INSTALLFOLDER" Name="Sh_Images" />
       </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AppMenuFolder" Name="Sh_Images" />
+      </Directory>
     </Directory>
 
     <!-- Feature principal: incluye todos los componentes -->

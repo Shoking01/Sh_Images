@@ -46,7 +46,7 @@ jobs:
 
       - name: Validate MSI artifact
         run: |
-          $msi = Get-Item installer\windows\sh_images-${{ github.ref_name }}-x64.msi
+          $msi = Get-Item installer\windows\sh_images-*-x64.msi
           if (-not $msi) { throw "MSI was not generated" }
           if ($msi.Length -gt 30MB) {
             throw "MSI size $($msi.Length) exceeds 30MB limit"
