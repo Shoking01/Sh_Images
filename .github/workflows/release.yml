@@ -1,9 +1,5 @@
 name: Release
 
-# Dispara solo en tags v* y manualmente. Genera el MSI de Windows +
-# artefactos release para macOS/Linux (build binario; installers pendientes
-# — ver docs/DISTRIBUTION.md). Ver Plan.md §Fase 5.
-
 on:
   push:
     tags:
@@ -27,10 +23,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install WiX 3.14
-        # Chocolatey no tiene el paquete `wix` 3.14, así que descargamos el
-        # zip de binarios directamente desde GitHub y lo extraemos a un path fijo.
-        # wix314-binaries.zip contiene candle.exe + light.exe sin instalador
-        # (los binarios están en la raíz del zip).
         run: |
           $zipPath = "$env:TEMP\wix314-binaries.zip"
           Invoke-WebRequest -Uri "https://github.com/wixtoolset/wix3/releases/download/wix314rtm/wix314-binaries.zip" -OutFile $zipPath
@@ -38,8 +30,6 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --locked
-        # windows_subsystem=windows está configurado en .cargo/config.toml o
-        # vía linker arg; el .exe sale sin consola.
 
       - name: Copy icon.ico to installer dir
         run: |
@@ -59,7 +49,7 @@ jobs:
           $msi = Get-Item installer\windows\sh_images-${{ github.ref_name }}-x64.msi
           if (-not $msi) { throw "MSI was not generated" }
           if ($msi.Length -gt 30MB) {
-            throw "MSI size $($msi.Length) exceeds 30MB limit (AGENTS.md §6.1)"
+            throw "MSI size $($msi.Length) exceeds 30MB limit"
           }
           Write-Host "MSI size: $([math]::Round($msi.Length / 1MB, 2)) MB"
 
@@ -69,6 +59,27 @@ jobs:
           name: sh_images-${{ github.ref_name }}-windows-x64-msi
           path: installer/windows/*.msi
           retention-days: 14
+
+      # ===== NUEVO: Subir MSI al Release de GitHub =====
+      - name: Upload MSI to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/windows/*.msi
+          name: Sh_Images ${{ github.ref_name }}
+          body: |
+            ## Sh_Images ${{ github.ref_name }}
+
+            ### Windows
+            - `sh_images-${{ github.ref_name }}-x64.msi` — Instalador MSI (x64)
+
+            ### macOS / Linux
+            - Descarga el binario desde la sección de artefactos del workflow
+
+            ### Notas
+            - Instalador firmado: **No** (pendiente)
+            - Asociaciones de archivos: `.png`, `.jpg`, `.jpeg`, `.bmp`, `.gif`, `.webp`, `.tiff`
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-other-platforms:
     name: Build binaries (macOS, Linux)
@@ -100,8 +111,15 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
-# Notas:
-# - macOS/Linux: solo compila el binario. El .app bundle y .deb/.AppImage
-#   están pendientes (Fase 5b). Ver docs/DISTRIBUTION.md.
-# - smoke test: valida existencia + size del MSI en CI. No instala ni ejecuta
-#   el MSI (período de espera UI en headless CI es frágil). Ver AGENTS.md §5.1.
+      # ===== NUEVO: Subir binarios al Release de GitHub =====
+      - name: Upload binary to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/sh_images
+          name: Sh_Images ${{ github.ref_name }}
+          append_body: true
+          body: |
+            ### ${{ runner.os }}
+            - `sh_images` — Binario release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
