@@ -46,6 +46,9 @@
       <ComponentRef Id="StartMenuShortcuts" />
     </Feature>
 
+    <!-- Acuerdo de licencia mostrado en el instalador (MIT real, no placeholder) -->
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+
     <UIRef Id="WixUI_Minimal" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
   </Product>
