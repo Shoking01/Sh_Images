@@ -20,7 +20,11 @@ if not exist "%WIXDIR%\candle.exe" (
     set "WIXDIR=C:\Program Files\WiX Toolset v3.14\bin"
 )
 if not exist "%WIXDIR%\candle.exe" (
-    echo ERROR: WiX no encontrado. Instala WiX 3.14 ^(choco install wix --version=3.14.0^)
+    REM CI fallback: wix314-binaries.zip se extrae a C:\wix\wix314-binaries\bin
+    if exist "C:\wix\wix314-binaries\bin\candle.exe" set "WIXDIR=C:\wix\wix314-binaries\bin"
+)
+if not exist "%WIXDIR%\candle.exe" (
+    echo ERROR: WiX no encontrado. Instala WiX 3.14 ^(o descarga wix314-binaries.zip desde wixtoolset/wix3/releases^)
     exit /b 1
 )
 

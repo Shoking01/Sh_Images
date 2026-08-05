@@ -27,8 +27,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install WiX 3.14
-        # WiX es el toolset para generar el MSI. choco instala candle.exe + light.exe.
-        run: choco install wix --version=3.14.0 -y
+        # Chocolatey no tiene el paquete `wix` 3.14, así que descargamos el
+        # zip de binarios directamente desde GitHub y lo extraemos a un path fijo.
+        # wix314-binaries.zip contiene candle.exe + light.exe sin instalador.
+        run: |
+          $zipPath = "$env:TEMP\wix314-binaries.zip"
+          Invoke-WebRequest -Uri "https://github.com/wixtoolset/wix3/releases/download/wix314rtm/wix314-binaries.zip" -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath "C:\wix" -Force
+          Get-ChildItem "C:\wix"
 
       - name: Build release binary
         run: cargo build --release --locked
