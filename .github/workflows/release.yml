@@ -70,17 +70,23 @@ jobs:
           files: installer/windows/*.msi
           name: Sh_Images ${{ github.ref_name }}
           body: |
-            ## Sh_Images ${{ github.ref_name }}
+            ## Sh_Images v0.2.0
+
+            ### What's new
+            - **Cursor-anchored zoom & pan** — zoom keeps the image point under the cursor fixed; drag to pan when zoomed in.
+            - **Set as default image viewer** — register `ShImages.ImageViewer` on Windows (HKCU) and open the default apps settings page.
+            - **Built-in editor** — crop with drag-on-viewer overlay; brightness, contrast, saturation sliders (-100..=100); filters: grayscale, sepia, invert, black & white; save as PNG, JPEG, BMP, WebP, or TIFF.
+            - **English/Spanish UI** — all text routed through a Lang table; preference persisted in `settings.toml` (`language = "en"` or `"es"`). Selector under the gear menu (⚙).
+            - **Unicode toolbar icons** — ◀ ▶ 🔄 ⊡ ⛶ ☰ ℹ ⏵ ✎ ⚙ ★ — clean and language-independent.
+            - **Compact gear menu** — theme, shortcuts, default viewer, and language selector collapsed under ⚙.
+            - **Default language: English** — fresh installs now start in English.
 
             ### Windows
-            - `sh_images-${{ github.ref_name }}-x64.msi` — Instalador MSI (x64)
+            - `sh_images-v0.2.0-x64.msi` — MSI installer (x64)
+            - File associations: `.png`, `.jpg`, `.jpeg`, `.bmp`, `.gif`, `.webp`, `.tif`, `.tiff`
 
             ### macOS / Linux
-            - Descarga el binario desde la sección de artefactos del workflow
-
-            ### Notas
-            - Instalador firmado: **No** (pendiente)
-            - Asociaciones de archivos: `.png`, `.jpg`, `.jpeg`, `.bmp`, `.gif`, `.webp`, `.tiff`
+            - Download the binary from the workflow artifacts section.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -123,6 +129,6 @@ jobs:
           append_body: true
           body: |
             ### ${{ runner.os }}
-            - `sh_images` — Binario release
+            - `sh_images` — Release binary
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
