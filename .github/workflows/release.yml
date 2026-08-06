@@ -2,28 +2,54 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-windows-release:
-    name: Build Windows Release (MSI)
+  # Detect version from Cargo.toml and decide if we should release.
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      skip: ${{ steps.exists.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Extract version from Cargo.toml
+        id: meta
+        run: |
+          VER=$(grep '^version = ' Cargo.toml | head -1 | sed 's/^version = "//;s/"$//')
+          echo "version=$VER" >> $GITHUB_OUTPUT
+
+      - name: Check if release already exists
+        id: exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "v${{ steps.meta.outputs.version }}" >/dev/null 2>&1; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Release v${{ steps.meta.outputs.version }} already exists — skipping."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-windows:
+    name: Build Windows MSI
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo registry
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install WiX 3.14
         run: |
@@ -43,92 +69,127 @@ jobs:
       - name: Build MSI
         working-directory: installer/windows
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
           RELEASE_DIR: ..\..\target\release
         run: cmd /c build.cmd
 
-      - name: Validate MSI artifact
+      - name: Validate MSI
         run: |
           $msi = Get-Item installer\windows\sh_images-*-x64.msi
           if (-not $msi) { throw "MSI was not generated" }
-          if ($msi.Length -gt 30MB) {
-            throw "MSI size $($msi.Length) exceeds 30MB limit"
-          }
-          Write-Host "MSI size: $([math]::Round($msi.Length / 1MB, 2)) MB"
+          if ($msi.Length -gt 30MB) { throw "MSI size $($msi.Length) exceeds 30MB limit" }
+          Write-Host "MSI OK: $([math]::Round($msi.Length / 1MB, 2)) MB"
 
       - name: Upload MSI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sh_images-${{ github.ref_name }}-windows-x64-msi
-          path: installer/windows/*.msi
+          name: msi-windows-x64
+          path: installer/windows/sh_images-*-x64.msi
           retention-days: 14
 
-      # ===== NUEVO: Subir MSI al Release de GitHub =====
-      - name: Upload MSI to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: installer/windows/*.msi
-          name: Sh_Images ${{ github.ref_name }}
-          body: |
-            ## Sh_Images v0.2.0
-
-            ### What's new
-            - **Cursor-anchored zoom & pan** — zoom keeps the image point under the cursor fixed; drag to pan when zoomed in.
-            - **Set as default image viewer** — register `ShImages.ImageViewer` on Windows (HKCU) and open the default apps settings page.
-            - **Built-in editor** — crop with drag-on-viewer overlay; brightness, contrast, saturation sliders (-100..=100); filters: grayscale, sepia, invert, black & white; save as PNG, JPEG, BMP, WebP, or TIFF.
-            - **English/Spanish UI** — all text routed through a Lang table; preference persisted in `settings.toml` (`language = "en"` or `"es"`). Selector under the gear menu (⚙).
-            - **Unicode toolbar icons** — ◀ ▶ 🔄 ⊡ ⛶ ☰ ℹ ⏵ ✎ ⚙ ★ — clean and language-independent.
-            - **Compact gear menu** — theme, shortcuts, default viewer, and language selector collapsed under ⚙.
-            - **Default language: English** — fresh installs now start in English.
-
-            ### Windows
-            - `sh_images-v0.2.0-x64.msi` — MSI installer (x64)
-            - File associations: `.png`, `.jpg`, `.jpeg`, `.bmp`, `.gif`, `.webp`, `.tif`, `.tiff`
-
-            ### macOS / Linux
-            - Download the binary from the workflow artifacts section.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-other-platforms:
-    name: Build binaries (macOS, Linux)
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest]
+  build-linux:
+    name: Build Linux binary
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo registry
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libclang-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libegl-mesa0 \
+            libgl1-mesa-dri
 
       - name: Build release binary
         run: cargo build --release
 
+      - name: Rename binary for upload
+        run: mv target/release/sh_images target/release/sh_images-linux-x64
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sh_images-${{ github.ref_name }}-${{ runner.os }}
-          path: target/release/sh_images
+          name: binary-linux-x64
+          path: target/release/sh_images-linux-x64
           retention-days: 14
-          if-no-files-found: warn
 
-      # ===== NUEVO: Subir binarios al Release de GitHub =====
-      - name: Upload binary to GitHub Release
+  build-macos:
+    name: Build macOS binary
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Rename binary for upload
+        run: mv target/release/sh_images target/release/sh_images-macos-x64
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-macos-x64
+          path: target/release/sh_images-macos-x64
+          retention-days: 14
+
+  # Create the GitHub Release once all builds succeed.
+  release:
+    name: Create GitHub Release
+    needs: [prepare, build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Extract changelog section for this version
+        id: changelog
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          # Pull out the block that starts with "## [x.y.z]" up to the next "##"
+          awk -v ver="## \\[${VERSION}\\]" '
+            $0 == ver {p=1; next}
+            /^## / && p {p=0}
+            p {print}
+          ' CHANGELOG.md > release_notes.md
+          echo "--- Release notes ---"
+          cat release_notes.md
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/sh_images
-          name: Sh_Images ${{ github.ref_name }}
-          append_body: true
-          body: |
-            ### ${{ runner.os }}
-            - `sh_images` — Release binary
+          tag_name: v${{ needs.prepare.outputs.version }}
+          name: Sh_Images v${{ needs.prepare.outputs.version }}
+          body_path: release_notes.md
+          make_latest: true
+          files: |
+            msi-windows-x64/*.msi
+            binary-linux-x64/sh_images-linux-x64
+            binary-macos-x64/sh_images-macos-x64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
