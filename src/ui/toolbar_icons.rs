@@ -79,8 +79,14 @@ fn rotate_cw(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
         let perp = Pos2::new(-dir.sin(), dir.cos());
         let w = s * 1.6;
         painter.line_segment([*tip, back], stroke);
-        painter.line_segment([back, Pos2::new(back.x + perp.x * w, back.y + perp.y * w)], stroke);
-        painter.line_segment([back, Pos2::new(back.x - perp.x * w, back.y - perp.y * w)], stroke);
+        painter.line_segment(
+            [back, Pos2::new(back.x + perp.x * w, back.y + perp.y * w)],
+            stroke,
+        );
+        painter.line_segment(
+            [back, Pos2::new(back.x - perp.x * w, back.y - perp.y * w)],
+            stroke,
+        );
     }
 }
 
@@ -162,9 +168,27 @@ fn play(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
     painter.line_segment([b, d], stroke);
     painter.line_segment([d, a], stroke);
     let inner = s * 0.6;
-    painter.line_segment([Pos2::new(a.x + inner, a.y + inner), Pos2::new(b.x + inner, b.y - inner)], stroke);
-    painter.line_segment([Pos2::new(b.x + inner, b.y - inner), Pos2::new(d.x - inner * 1.2, c.y)], stroke);
-    painter.line_segment([Pos2::new(d.x - inner * 1.2, c.y), Pos2::new(a.x + inner, a.y + inner)], stroke);
+    painter.line_segment(
+        [
+            Pos2::new(a.x + inner, a.y + inner),
+            Pos2::new(b.x + inner, b.y - inner),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            Pos2::new(b.x + inner, b.y - inner),
+            Pos2::new(d.x - inner * 1.2, c.y),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            Pos2::new(d.x - inner * 1.2, c.y),
+            Pos2::new(a.x + inner, a.y + inner),
+        ],
+        stroke,
+    );
 }
 
 fn pencil(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
@@ -173,7 +197,10 @@ fn pencil(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
     let mid = c.y + r * 0.2;
     let bot = c.y + r * 0.8;
     painter.rect_filled(
-        Rect::from_center_size(Pos2::new(c.x, (top + mid) / 2.0), egui::vec2(half_w * 2.0, mid - top)),
+        Rect::from_center_size(
+            Pos2::new(c.x, (top + mid) / 2.0),
+            egui::vec2(half_w * 2.0, mid - top),
+        ),
         0.0,
         color,
     );
@@ -181,7 +208,10 @@ fn pencil(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
     let stroke = Stroke::new(s, color);
     painter.line_segment([Pos2::new(c.x - half_w, mid), Pos2::new(c.x, bot)], stroke);
     painter.line_segment([Pos2::new(c.x + half_w, mid), Pos2::new(c.x, bot)], stroke);
-    painter.line_segment([Pos2::new(c.x - half_w, mid), Pos2::new(c.x + half_w, mid)], stroke);
+    painter.line_segment(
+        [Pos2::new(c.x - half_w, mid), Pos2::new(c.x + half_w, mid)],
+        stroke,
+    );
 }
 
 fn gear(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
@@ -196,7 +226,10 @@ fn gear(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
     for i in 0..teeth {
         let a = (i as f32) * TAU / teeth as f32;
         let p1 = Pos2::new(c.x + outer * a.cos(), c.y + outer * a.sin());
-        let p2 = Pos2::new(c.x + (outer + tooth_len) * a.cos(), c.y + (outer + tooth_len) * a.sin());
+        let p2 = Pos2::new(
+            c.x + (outer + tooth_len) * a.cos(),
+            c.y + (outer + tooth_len) * a.sin(),
+        );
         painter.line_segment([p1, p2], stroke);
     }
 }

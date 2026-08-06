@@ -119,8 +119,7 @@ impl ShImagesApp {
                     }
                     match image {
                         Ok(image) => {
-                            let thumb =
-                                generate_thumbnail_capped(image.first_frame(), THUMB_MAX);
+                            let thumb = generate_thumbnail_capped(image.first_frame(), THUMB_MAX);
                             cache.insert(path.clone(), thumb);
                         }
                         Err(e) => {
