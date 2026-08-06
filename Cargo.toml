@@ -1,6 +1,6 @@
 [package]
 name = "sh_images"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 # MSRV: eframe/egui 0.35 requieren Rust 1.92 (ver ADR-005).
 rust-version = "1.92"

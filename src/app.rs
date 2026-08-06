@@ -911,31 +911,33 @@ impl eframe::App for ShImagesApp {
         let mut want_open = false;
         egui::CentralPanel::default().show(ui, |ui| {
             egui::menu::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("Archivo", |ui| {
-                    if ui.button("Abrir…").clicked() {
+                let lang = self.settings.language;
+                let t = lang.translations();
+                ui.menu_button(t.menu_file, |ui| {
+                    if ui.button(t.open).clicked() {
                         ui.close();
                         want_open = true;
                     }
                 });
-                ui.menu_button("Ver", |ui| {
+                ui.menu_button(t.menu_view, |ui| {
                     if ui
-                        .button(Action::ToggleSidebar.label(self.settings.language))
+                        .button(Action::ToggleSidebar.label(lang))
                         .clicked()
                     {
                         ui.close();
                         self.dispatch(Action::ToggleSidebar);
                     }
                     if ui
-                        .button(Action::Fullscreen.label(self.settings.language))
+                        .button(Action::Fullscreen.label(lang))
                         .clicked()
                     {
                         ui.close();
                         self.dispatch(Action::Fullscreen);
                     }
                 });
-                ui.menu_button("Ayuda", |ui| {
+                ui.menu_button(t.menu_help, |ui| {
                     if ui
-                        .button(Action::EditShortcuts.label(self.settings.language))
+                        .button(Action::EditShortcuts.label(lang))
                         .clicked()
                     {
                         ui.close();

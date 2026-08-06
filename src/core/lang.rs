@@ -94,6 +94,9 @@ pub struct Translations {
     pub conflict_suffix: &'static str,
     pub invalid_combo: &'static str,
     pub reset_all: &'static str,
+    pub menu_file: &'static str,
+    pub menu_view: &'static str,
+    pub menu_help: &'static str,
 }
 
 const ES: Translations = Translations {
@@ -177,6 +180,9 @@ const ES: Translations = Translations {
     conflict_suffix: "» ya usa esa combinación",
     invalid_combo: "Combinación no válida",
     reset_all: "Restablecer todos",
+    menu_file: "Archivo",
+    menu_view: "Ver",
+    menu_help: "Ayuda",
 };
 
 const EN: Translations = Translations {
@@ -260,6 +266,9 @@ const EN: Translations = Translations {
     conflict_suffix: "» already uses that shortcut",
     invalid_combo: "Invalid shortcut",
     reset_all: "Reset all",
+    menu_file: "File",
+    menu_view: "View",
+    menu_help: "Help",
 };
 #[macro_export]
 macro_rules! t {
