@@ -920,26 +920,17 @@ impl eframe::App for ShImagesApp {
                     }
                 });
                 ui.menu_button(t.menu_view, |ui| {
-                    if ui
-                        .button(Action::ToggleSidebar.label(lang))
-                        .clicked()
-                    {
+                    if ui.button(Action::ToggleSidebar.label(lang)).clicked() {
                         ui.close();
                         self.dispatch(Action::ToggleSidebar);
                     }
-                    if ui
-                        .button(Action::Fullscreen.label(lang))
-                        .clicked()
-                    {
+                    if ui.button(Action::Fullscreen.label(lang)).clicked() {
                         ui.close();
                         self.dispatch(Action::Fullscreen);
                     }
                 });
                 ui.menu_button(t.menu_help, |ui| {
-                    if ui
-                        .button(Action::EditShortcuts.label(lang))
-                        .clicked()
-                    {
+                    if ui.button(Action::EditShortcuts.label(lang)).clicked() {
                         ui.close();
                         self.dispatch(Action::EditShortcuts);
                     }
