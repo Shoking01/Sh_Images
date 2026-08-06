@@ -1,12 +1,17 @@
 use eframe::egui;
+use egui::{Sense, Vec2};
 
 use crate::core::actions::Action;
 use crate::core::lang::Language;
 use crate::core::shortcuts::ShortcutMap;
+use crate::ui::toolbar_icons::ToolbarIcon;
+
+const ICON_SIZE: f32 = 22.0;
+
 pub fn show(
     ui: &mut egui::Ui,
     shortcuts: &ShortcutMap,
-    theme_name: &str,
+    _theme_name: &str,
     is_fullscreen: bool,
     slideshow_active: bool,
     lang: crate::core::lang::Language,
@@ -15,37 +20,55 @@ pub fn show(
     let t = lang.translations();
     egui::Panel::top("toolbar").exact_size(30.0).show(ui, |ui| {
         ui.horizontal(|ui| {
-            if toolbar_button(ui, "◀", Action::Prev, shortcuts, lang) {
+            if toolbar_button(ui, ToolbarIcon::Prev, Action::Prev, shortcuts, lang) {
                 clicked = Some(Action::Prev);
             }
-            if toolbar_button(ui, "▶", Action::Next, shortcuts, lang) {
+            if toolbar_button(ui, ToolbarIcon::Next, Action::Next, shortcuts, lang) {
                 clicked = Some(Action::Next);
             }
 
             ui.separator();
 
-            if toolbar_button(ui, "🔄", Action::RotateCw, shortcuts, lang) {
+            if toolbar_button(ui, ToolbarIcon::RotateCw, Action::RotateCw, shortcuts, lang) {
                 clicked = Some(Action::RotateCw);
             }
-            if toolbar_button(ui, "⊡", Action::Fit, shortcuts, lang) {
+            if toolbar_button(ui, ToolbarIcon::Fit, Action::Fit, shortcuts, lang) {
                 clicked = Some(Action::Fit);
             }
 
             ui.separator();
 
-            if toolbar_button(ui, "⛶", Action::Fullscreen, shortcuts, lang) {
+            if toolbar_button(
+                ui,
+                ToolbarIcon::Fullscreen,
+                Action::Fullscreen,
+                shortcuts,
+                lang,
+            ) {
                 clicked = Some(Action::Fullscreen);
             }
-            if toolbar_button(ui, "☰", Action::ToggleSidebar, shortcuts, lang) {
+            if toolbar_button(
+                ui,
+                ToolbarIcon::Sidebar,
+                Action::ToggleSidebar,
+                shortcuts,
+                lang,
+            ) {
                 clicked = Some(Action::ToggleSidebar);
             }
-            if toolbar_button(ui, "ℹ", Action::ToggleInfo, shortcuts, lang) {
+            if toolbar_button(ui, ToolbarIcon::Info, Action::ToggleInfo, shortcuts, lang) {
                 clicked = Some(Action::ToggleInfo);
             }
-            if toolbar_button(ui, "⏵", Action::ToggleSlideshow, shortcuts, lang) {
+            if toolbar_button(
+                ui,
+                ToolbarIcon::Slideshow,
+                Action::ToggleSlideshow,
+                shortcuts,
+                lang,
+            ) {
                 clicked = Some(Action::ToggleSlideshow);
             }
-            if toolbar_button(ui, "✎", Action::Edit, shortcuts, lang) {
+            if toolbar_button(ui, ToolbarIcon::Edit, Action::Edit, shortcuts, lang) {
                 clicked = Some(Action::Edit);
             }
             ui.menu_button("⚙", |ui| {
@@ -75,7 +98,6 @@ pub fn show(
             });
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(format!("Tema: {theme_name}"));
                 if is_fullscreen {
                     ui.colored_label(egui::Color32::YELLOW, "[*] Fullscreen");
                 }
@@ -87,12 +109,13 @@ pub fn show(
     });
     clicked
 }
+
 fn toolbar_button(
     ui: &mut egui::Ui,
-    icon: &str,
+    icon: ToolbarIcon,
     action: Action,
     shortcuts: &ShortcutMap,
-    lang: crate::core::lang::Language,
+    lang: Language,
 ) -> bool {
     let shortcut = shortcuts
         .get(action)
@@ -103,5 +126,15 @@ fn toolbar_button(
     } else {
         format!("{} ({shortcut})", action.label(lang))
     };
-    ui.button(icon).on_hover_text(tooltip).clicked()
+    let size = Vec2::splat(ICON_SIZE);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let visuals = ui.style().interact(&response);
+    let painter = ui.painter();
+    if response.hovered() {
+        painter.rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
+    }
+    let icon_rect = rect.shrink(4.0);
+    icon.paint(painter, icon_rect, visuals.text_color());
+    response.clone().on_hover_text(tooltip);
+    response.clicked()
 }

@@ -8,4 +8,5 @@ pub mod statusbar;
 pub mod theme;
 pub mod toast;
 pub mod toolbar;
+pub mod toolbar_icons;
 pub mod viewer;

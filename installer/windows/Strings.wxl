@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Strings.wxl — localización en inglés (1033) para la UI personalizada
+  de instalación de Sh_Images (ShImagesUI).
+-->
+<WixLocalization Culture="en-us" xmlns="http://schemas.microsoft.com/wix/2006/localization">
+  <!-- Custom checkbox strings -->
+  <String Id="AssociateCheckBoxText">Associate image formats (PNG, JPG, BMP, GIF, WebP, TIFF)</String>
+  <String Id="DesktopShortcutCheckBoxText">Create a desktop shortcut</String>
+
+  <!-- OptionalFeaturesDlg custom dialog -->
+  <String Id="OptionalFeaturesDlgTitle">{\WixUI_Font_Title}Additional Options</String>
+  <String Id="OptionalFeaturesDlgDescription">Choose additional setup options for [ProductName].</String>
+
+  <!-- Standard WixUI strings -->
+  <String Id="WixUIBack">&amp;Back</String>
+  <String Id="WixUINext">&amp;Next</String>
+  <String Id="WixUICancel">Cancel</String>
+  <String Id="WixUIFinish">&amp;Finish</String>
+  <String Id="Print">Print</String>
+
+  <String Id="WelcomeDlgTitle">{\WixUI_Font_Title}Welcome to the [ProductName] Setup Wizard</String>
+  <String Id="WelcomeDlgDescription">This wizard will guide you through the installation of [ProductName].</String>
+
+  <String Id="LicenseAgreementDlgTitle">{\WixUI_Font_Title}License Agreement</String>
+  <String Id="LicenseAgreementDlgBannerBitmap">WixUI_Bmp_Banner</String>
+  <String Id="LicenseAgreementDlgDescription">Please read the following license agreement carefully.</String>
+  <String Id="LicenseAgreementDlgBannerText">{\WixUI_Font_Bigger}End-User License Agreement</String>
+  <String Id="LicenseAgreementDlgLicenseAcceptedCheckBox">I &amp;accept the terms in the License Agreement</String>
+
+  <String Id="InstallDirDlgTitle">{\WixUI_Font_Title}Destination Folder</String>
+  <String Id="InstallDirDlgBannerBitmap">WixUI_Bmp_Banner</String>
+  <String Id="InstallDirDlgDescription">Click Next to install in the default folder or click Browse to choose another location.</String>
+  <String Id="InstallDirDlgFolderLabel">Install [ProductName] to:</String>
+  <String Id="InstallDirDlgChange">B&amp;rowse</String>
+
+  <String Id="BrowseDlgTitle">{\WixUI_Font_Title}Change destination folder</String>
+  <String Id="BrowseDlgBannerBitmap">WixUI_Bmp_Banner</String>
+  <String Id="BrowseDlgDescription">Browse to the destination folder.</String>
+  <String Id="BrowseDlgUp">Up</String>
+  <String Id="BrowseDlgNewFolder">Create new folder</String>
+  <String Id="BrowseDlgPathLabel">Folder name:</String>
+
+  <String Id="VerifyReadyDlgTitle">{\WixUI_Font_Title}Ready to install</String>
+  <String Id="VerifyReadyDlgBannerBitmap">WixUI_Bmp_Banner</String>
+  <String Id="VerifyReadyDlgDescription">Click Install to begin the installation.</String>
+  <String Id="VerifyReadyDlgText">Click Install to begin the installation. Click Back to review or change any of your installation settings.</String>
+
+  <String Id="ProgressDlgTitle">{\WixUI_Font_Title}Installing [ProductName]</String>
+  <String Id="ProgressDlgBannerBitmap">WixUI_Bmp_Banner</String>
+  <String Id="ProgressDlgDescription">Please wait while [ProductName] is being installed.</String>
+  <String Id="ProgressDlgText">Please wait...</String>
+
+  <String Id="ExitDialogTitle">{\WixUI_Font_Title}Completed the [ProductName] Setup Wizard</String>
+  <String Id="ExitDialogDescription">Click Finish to exit the wizard.</String>
+  <String Id="ExitDialogBitmap">WixUI_Bmp_Dialog</String>
+
+  <String Id="CancelDlgTitle">{\WixUI_Font_Title}Exit Setup</String>
+  <String Id="CancelDlgText">Are you sure you want to cancel [ProductName] installation?</String>
+  <String Id="CancelDlgYes">&amp;Yes</String>
+  <String Id="CancelDlgNo">&amp;No</String>
+</WixLocalization>

@@ -85,15 +85,36 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+"%WIXDIR%\candle.exe" ^
+    -arch x64 ^
+    -out DesktopShortcut.wixobj DesktopShortcut.wxs
+
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: candle fallo en DesktopShortcut.wxs
+    exit /b %ERRORLEVEL%
+)
+
+"%WIXDIR%\candle.exe" ^
+    -arch x64 ^
+    -out OptionalFeaturesDlg.wixobj OptionalFeaturesDlg.wxs
+
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: candle fallo en OptionalFeaturesDlg.wxs
+    exit /b %ERRORLEVEL%
+)
+
 REM --- Link to MSI ---
 set "MSI_NAME=sh_images-%VERSION%-x64.msi"
 "%WIXDIR%\light.exe" ^
     -out %MSI_NAME% ^
     Product.wixobj Files.wixobj Associations.wixobj Shortcuts.wixobj ^
+    DesktopShortcut.wixobj OptionalFeaturesDlg.wixobj ^
     -ext WixUIExtension ^
     -ext WixUtilExtension ^
+    -loc Strings.wxl ^
     -b . ^
-    -sice:ICE69
+    -sice:ICE69 ^
+    -sice:ICE17
 
 if %ERRORLEVEL% NEQ 0 (
     echo ERROR: light fallo al generar %MSI_NAME%

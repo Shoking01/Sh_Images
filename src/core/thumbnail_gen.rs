@@ -23,6 +23,18 @@ pub fn generate_thumbnail(image: &DynamicImage, max: u32) -> DynamicImage {
     image.thumbnail(nw, nh)
 }
 
+pub fn generate_thumbnail_capped(image: &DynamicImage, max: u32) -> DynamicImage {
+    let (w, h) = image.dimensions();
+    if w == 0 || h == 0 {
+        return image.clone();
+    }
+    let (nw, nh) = thumbnail_size(w, h, max);
+    if nw == w && nh == h {
+        return image.thumbnail(nw, nh);
+    }
+    image.thumbnail(nw, nh)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -24,7 +24,7 @@ use crate::core::shortcuts::ShortcutMap;
 use crate::core::slideshow;
 use crate::core::thumb_queue::ThumbQueue;
 use crate::core::thumbnail_cache::ThumbnailCache;
-use crate::core::thumbnail_gen::{generate_thumbnail, THUMB_MAX};
+use crate::core::thumbnail_gen::{generate_thumbnail_capped, THUMB_MAX};
 use crate::core::view::{Vec2, ViewTransform};
 use crate::ui::{
     editor::{self},
@@ -119,7 +119,8 @@ impl ShImagesApp {
                     }
                     match image {
                         Ok(image) => {
-                            let thumb = generate_thumbnail(image.first_frame(), THUMB_MAX);
+                            let thumb =
+                                generate_thumbnail_capped(image.first_frame(), THUMB_MAX);
                             cache.insert(path.clone(), thumb);
                         }
                         Err(e) => {
@@ -227,10 +228,8 @@ impl ShImagesApp {
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .clear();
-                for image_path in &nav.images {
-                    self.thumb_queue.push(image_path.clone());
-                }
                 self.navigation = Some(nav);
+                self.enqueue_thumbnails();
                 self.start_load(path);
             }
             Err(e) => {
@@ -439,6 +438,17 @@ impl ShImagesApp {
     }
     fn toggle_sidebar(&mut self) {
         self.sidebar.show = !self.sidebar.show;
+        if self.sidebar.show {
+            self.enqueue_thumbnails();
+        }
+    }
+    fn enqueue_thumbnails(&mut self) {
+        let Some(nav) = &self.navigation else {
+            return;
+        };
+        for image_path in &nav.images {
+            self.thumb_queue.push(image_path.clone());
+        }
     }
     fn toggle_slideshow(&mut self) {
         self.slideshow_active = !self.slideshow_active;
@@ -533,12 +543,16 @@ impl ShImagesApp {
         match action {
             Action::Open => self.open_dialog(),
             Action::Prev => {
-                self.pause_slideshow();
-                self.navigate(-1);
+                if self.edit_state.is_none() {
+                    self.pause_slideshow();
+                    self.navigate(-1);
+                }
             }
             Action::Next => {
-                self.pause_slideshow();
-                self.navigate(1);
+                if self.edit_state.is_none() {
+                    self.pause_slideshow();
+                    self.navigate(1);
+                }
             }
             Action::RotateCw => self.rotate_image(true),
             Action::RotateCcw => self.rotate_image(false),

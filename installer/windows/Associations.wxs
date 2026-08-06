@@ -15,6 +15,7 @@
   <Fragment>
     <DirectoryRef Id="INSTALLFOLDER">
       <Component Id="FileAssociations" Guid="D4E6F8A0-B1C2-4D3E-9F8E-0A1B2C3D4E5F">
+        <Condition>ASSOCIATE_EXTENSIONS</Condition>
         <RegistryValue
           Root="HKLM"
           Key="Software\Microsoft\Windows\CurrentVersion\App Paths\sh_images.exe"

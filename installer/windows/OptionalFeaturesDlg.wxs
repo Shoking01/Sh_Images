@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <!--
+    OptionalFeaturesDlg.wxs — diálogo con dos checkboxes opcionales:
+      - "Asociar formatos de imagen" (ASSOCIATE_EXTENSIONS)
+      - "Crear acceso directo en el escritorio" (CREATE_DESKTOP_SHORTCUT)
+    Por defecto ambos marcados (propiedades = 1 en Product.wxs).
+  -->
+  <Fragment>
+    <UI>
+      <Dialog Id="OptionalFeaturesDlg" Width="370" Height="270" Title="!(loc.OptionalFeaturesDlgTitle)">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="!(loc.OptionalFeaturesDlgTitle)" />
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="Description" Type="Text" X="25" Y="63" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="!(loc.OptionalFeaturesDlgDescription)" />
+
+        <Control Id="AssociateCheckBox" Type="CheckBox" X="25" Y="110" Width="320" Height="18" Property="ASSOCIATE_EXTENSIONS" CheckBoxValue="1" Text="!(loc.AssociateCheckBoxText)" />
+        <Control Id="DesktopShortcutCheckBox" Type="CheckBox" X="25" Y="140" Width="320" Height="18" Property="CREATE_DESKTOP_SHORTCUT" CheckBoxValue="1" Text="!(loc.DesktopShortcutCheckBoxText)" />
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="InstallDirDlg">1</Publish>
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+    </UI>
+  </Fragment>
+</Wix>

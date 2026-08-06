@@ -58,6 +58,28 @@ fn main() {
         ico_bytes.len()
     );
 
+    // Emit a Rust module with the 256x256 RGBA pixel data so main.rs can
+    // include!() it and pass it to eframe::ViewportBuilder::with_icon().
+    let (icon_size, icon_rgba) = rgba_bufs.last().expect("icon rgba");
+    let mut rs = String::new();
+    rs.push_str(&format!("pub const ICON_WIDTH: u32 = {};\n", icon_size));
+    rs.push_str(&format!("pub const ICON_HEIGHT: u32 = {};\n", icon_size));
+    rs.push_str("pub const ICON_RGBA: &[u8] = &[\n");
+    for (i, byte) in icon_rgba.iter().enumerate() {
+        if i % 32 == 0 {
+            rs.push_str("    ");
+        }
+        rs.push_str(&format!("{},", byte));
+        if i % 32 == 31 {
+            rs.push('\n');
+        }
+    }
+    if icon_rgba.len() % 32 != 0 {
+        rs.push('\n');
+    }
+    rs.push_str("];\n");
+    fs::write(out_dir.join("icon_data.rs"), rs).expect("failed to write icon_data.rs");
+
     embed_icon(&ico_bytes);
 }
 

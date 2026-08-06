@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <!--
+    DesktopShortcut.wxs — acceso directo opcional en el escritorio.
+    Se instala solo si el usuario marca el checkbox "Crear acceso directo
+    en el escritorio" (propiedad CREATE_DESKTOP_SHORTCUT = 1).
+  -->
+  <Fragment>
+    <DirectoryRef Id="DesktopFolder">
+      <Component
+        Id="DesktopShortcut"
+        Guid="F7A9B2C4-D5E6-4F7A-9B0C-1D2E3F4A5B6C">
+        <Condition>CREATE_DESKTOP_SHORTCUT</Condition>
+        <Shortcut
+          Id="DesktopShortcutLink"
+          Name="Sh_Images"
+          Description="Sh_Images - Visor de im&#xE1;genes nativo"
+          Target="[INSTALLFOLDER]sh_images.exe"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="AppIcon" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\Sh_Images\DesktopShortcut"
+          Type="string"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

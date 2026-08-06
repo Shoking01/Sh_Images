@@ -37,6 +37,7 @@
       <Directory Id="ProgramMenuFolder">
         <Directory Id="AppMenuFolder" Name="Sh_Images" />
       </Directory>
+      <Directory Id="DesktopFolder" Name="Desktop" />
     </Directory>
 
     <!-- Feature principal: incluye todos los componentes -->
@@ -47,12 +48,44 @@
       <ComponentRef Id="AppComponents" />
       <ComponentRef Id="FileAssociations" />
       <ComponentRef Id="StartMenuShortcuts" />
+      <ComponentRef Id="DesktopShortcut" />
     </Feature>
 
     <!-- Acuerdo de licencia mostrado en el instalador (MIT real, no placeholder) -->
     <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
 
-    <UIRef Id="WixUI_Minimal" />
+    <!-- Directorio por defecto que mostrará InstallDirDlg. -->
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
+    <!-- Propiedades para los checkboxes opcionales (1 = marcado por defecto) -->
+    <Property Id="ASSOCIATE_EXTENSIONS" Value="1" />
+    <Property Id="CREATE_DESKTOP_SHORTCUT" Value="1" />
+
+    <!--
+      UI de instalación estándar con selección de carpeta (WixUI_InstallDir).
+      El UIRef DEBE estar dentro de <UI> para que los <Publish> que
+      redirigen InstallDirDlg.Next → OptionalFeaturesDlg apliquen correctamente.
+      También redirigimos ExitDialog.Finish → DoAction LaunchApplication
+      (el ExitDialog estándar solo hace EndDialog).
+    -->
+    <UI>
+      <UIRef Id="WixUI_InstallDir" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="OptionalFeaturesDlg">
+        1
+      </Publish>
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication">
+        WIXUI_EXITDIALOGOPTIONALCHECKBOX
+      </Publish>
+    </UI>
+
+    <!-- Custom action "Lanzar Sh_Images" — WixShellExec. -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Lanzar Sh_Images" />
+    <Property Id="WixShellExecTarget" Value="[#ShImagesExe]" />
+    <CustomAction
+      Id="LaunchApplication"
+      BinaryKey="WixCA"
+      DllEntry="WixShellExec"
+      Impersonate="yes" />
   </Product>
 </Wix>

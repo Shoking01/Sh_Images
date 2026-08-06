@@ -28,6 +28,18 @@ pub fn parse_cli_path() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Loads the window icon embedded at compile time by `build.rs`.
+fn load_icon() -> egui::IconData {
+    mod icon_data {
+        include!(concat!(env!("OUT_DIR"), "/icon_data.rs"));
+    }
+    egui::IconData {
+        rgba: icon_data::ICON_RGBA.to_vec(),
+        width: icon_data::ICON_WIDTH,
+        height: icon_data::ICON_HEIGHT,
+    }
+}
+
 /// Starts the app with a 1280x800 window.
 fn main() -> eframe::Result<()> {
     init_logging();
@@ -36,7 +48,9 @@ fn main() -> eframe::Result<()> {
         tracing::info!(path = %p.display(), "opening image from CLI");
     }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 800.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 800.0])
+            .with_icon(load_icon()),
         ..Default::default()
     };
     eframe::run_native(

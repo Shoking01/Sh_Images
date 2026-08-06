@@ -96,6 +96,7 @@ impl LoadedImage {
     }
 }
 pub const MIN_FRAME_DELAY: Duration = Duration::from_millis(20);
+pub const MAX_GIF_FRAMES: usize = 120;
 pub fn load_image(path: &Path) -> Result<LoadedImage> {
     let reader = ImageReader::open(path)?;
     let reader = reader.with_guessed_format()?;
@@ -113,6 +114,10 @@ fn load_animated_gif(path: &Path) -> Result<LoadedImage> {
         .map_err(map_image_error)?;
     let mut frames = Vec::new();
     for frame in decoder.into_frames() {
+        if frames.len() >= MAX_GIF_FRAMES {
+            tracing::warn!(path = %path.display(), limit = MAX_GIF_FRAMES, "gif frame limit reached; truncating");
+            break;
+        }
         let frame = frame.map_err(map_image_error)?;
         let delay = clamp_delay(Duration::from(frame.delay()));
         frames.push(AnimatedFrame {
