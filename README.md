@@ -2,7 +2,7 @@
 
 # Sh_Images
 
-**Native image viewer · Lightweight · Fast · No Electron**
+**Visor de imágenes nativo · Ligero · Rápido · Sin Electron**
 
 <!-- Language toggle -->
 <input type="radio" name="lang" id="lang-en" checked hidden>
@@ -15,13 +15,17 @@
 
 </div>
 
+---
+
 <!-- ===================== ENGLISH ===================== -->
 <div class="lang-content" id="content-en">
+
+## English
 
 A native image viewer built in Rust using `egui` + `eframe`. No Electron, no WebView — just a fast,
 responsive desktop app powered by an immediate-mode GUI with wgpu rendering.
 
-## Architecture
+### Architecture
 
 | Layer | Responsibility |
 |-------|---------------|
@@ -43,7 +47,7 @@ ensuring instant navigation.
 **Thumbnail Generation:** Capped dimensions (configurable), processed via a bounded thread pool
 (3 workers) with a separate LRU cache for decoded thumbnails.
 
-## Features
+### Features
 
 - **Instant open** — images load in <200 ms (4K) with async decoding
 - **Zoom & pan** — centered zoom, mouse wheel, drag to pan, fit-to-window
@@ -57,7 +61,7 @@ ensuring instant navigation.
 - **Configurable shortcuts** — edit keybindings via in-app dialog
 - **Windows MSI installer** — associates PNG, JPEG, BMP, GIF, WebP, TIFF, AVIF
 
-## Supported Formats
+### Supported Formats
 
 | Format | Encoding | Status |
 |--------|----------|--------|
@@ -69,15 +73,15 @@ ensuring instant navigation.
 | TIFF | Multi-page | ✅ Supported |
 | AVIF | AV1-based | ✅ Supported |
 
-## Installation
+### Installation
 
-### Windows (release)
+#### Windows (release)
 [Download the MSI](https://github.com/Shoking01/Sh_Images/releases) from GitHub Releases and run it.
 Supported image extensions are associated automatically.
 
 Other platforms (macOS, Linux) — build from source.
 
-### From source
+#### From source
 ```bash
 # Requires Rust 1.92+ (stable)
 git clone https://github.com/Shoking01/Sh_Images.git
@@ -91,14 +95,27 @@ cargo run --release
 - On Windows (MSI): `cargo-wix` or WiX Toolset v3
 - SVG toolchain for icon rendering: `resvg` (bundled via build.rs)
 
-## CLI
+### CLI
 ```bat
 sh_images.exe "C:\path\to\image.png"
 ```
 
 Pass an image path as the first argument to open it directly.
 
-## Development
+### Configuration
+
+Settings are stored in `settings.toml` (platform-specific config directory):
+
+```toml
+cache_memory_limit_mb = 512
+theme = "dark"
+slideshow_interval_secs = 5
+language = "en"
+```
+
+First run creates defaults. Atomic write (temp + rename) prevents corruption.
+
+### Development
 ```bash
 # Run all checks before committing
 cargo check && cargo clippy --all-targets -- -D warnings && cargo fmt --check && cargo test
@@ -113,20 +130,7 @@ cargo bench
 **Code quality:** `clippy -- -D warnings` enforced. `cargo fmt` for formatting. Snapshot testing
 via `insta` for UI state.
 
-## Configuration
-
-Settings are stored in `settings.toml` (platform-specific config directory):
-
-```toml
-cache_memory_limit_mb = 512
-theme = "dark"
-slideshow_interval_secs = 5
-language = "en"
-```
-
-First run creates defaults. Atomic write (temp + rename) prevents corruption.
-
-## Contributing
+### Contributing
 1. Fork the repo
 2. Create a feature branch (`git checkout -b feature/your-feature`)
 3. Write tests for new functionality
@@ -135,7 +139,7 @@ First run creates defaults. Atomic write (temp + rename) prevents corruption.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full guidelines.
 
-## License
+### License
 MIT License — see [LICENSE](LICENSE).
 
 </div>
@@ -143,10 +147,12 @@ MIT License — see [LICENSE](LICENSE).
 <!-- ===================== ESPAÑOL ===================== -->
 <div class="lang-content" id="content-es">
 
+## Español
+
 Un visor de imágenes nativo construido en Rust con `egui` + `eframe`. Sin Electron, sin WebView —
 una aplicación de escritorio rápida y responsiva basada en GUI immediate-mode con renderizado wgpu.
 
-## Arquitectura
+### Arquitectura
 
 | Capa | Responsabilidad |
 |------|----------------|
@@ -169,7 +175,7 @@ profundidad configurable, garantizando navegación instantánea.
 **Generación de miniaturas:** Dimensiones acotadas (configurables), procesadas vía pool de hilos
 acotado (3 trabajadores) con caché LRU independiente para miniaturas decodificadas.
 
-## Características
+### Características
 
 - **Apertura instantánea** — imágenes se cargan en <200 ms (4K) con decodificación asíncrona
 - **Zoom y pan** — zoom centrado, rueda del ratón, arrastrar, ajustar a ventana
@@ -183,7 +189,7 @@ acotado (3 trabajadores) con caché LRU independiente para miniaturas decodifica
 - **Atajos configurables** — edición de keybindings vía diálogo en la app
 - **Instalador MSI para Windows** — asocia PNG, JPEG, BMP, GIF, WebP, TIFF, AVIF
 
-## Formatos soportados
+### Formatos soportados
 
 | Formato | Codificación | Estado |
 |---------|-------------|--------|
@@ -195,15 +201,15 @@ acotado (3 trabajadores) con caché LRU independiente para miniaturas decodifica
 | TIFF | Multi-página | ✅ Soportado |
 | AVIF | Basado en AV1 | ✅ Soportado |
 
-## Instalación
+### Instalación
 
-### Windows (release)
+#### Windows (release)
 [Descargá el MSI](https://github.com/Shoking01/Sh_Images/releases) de GitHub Releases y ejecutalo.
 Las extensiones soportadas se asocian automáticamente.
 
 Otras plataformas (macOS, Linux) — compilar desde código.
 
-### Desde código
+#### Desde código
 ```bash
 # Requiere Rust 1.92+ (stable)
 git clone https://github.com/Shoking01/Sh_Images.git
@@ -217,14 +223,27 @@ cargo run --release
 - En Windows (MSI): `cargo-wix` o WiX Toolset v3
 - Toolchain SVG para renderizado de icono: `resvg` (incluido vía build.rs)
 
-## CLI
+### CLI
 ```bat
 sh_images.exe "C:\ruta\a\imagen.png"
 ```
 
 Pasá una ruta de imagen como primer argumento para abrirla directamente.
 
-## Desarrollo
+### Configuración
+
+La configuración se guarda en `settings.toml` (directorio de configuración específico de plataforma):
+
+```toml
+cache_memory_limit_mb = 512
+theme = "dark"
+slideshow_interval_secs = 5
+language = "en"
+```
+
+La primera ejecución crea valores por defecto. Escritura atómica (temp + rename) previene corrupción.
+
+### Desarrollo
 ```bash
 # Ejecutá todos los checks antes de commit
 cargo check && cargo clippy --all-targets -- -D warnings && cargo fmt --check && cargo test
@@ -239,20 +258,7 @@ cargo bench
 **Calidad de código:** `clippy -- -D warnings` obligatorio. `cargo fmt` para formato. Snapshot
 testing vía `insta` para estado de UI.
 
-## Configuración
-
-La configuración se guarda en `settings.toml` (directorio de configuración específico de plataforma):
-
-```toml
-cache_memory_limit_mb = 512
-theme = "dark"
-slideshow_interval_secs = 5
-language = "en"
-```
-
-La primera ejecución crea valores por defecto. Escritura atómica (temp + rename) previene corrupción.
-
-## Contribuir
+### Contribuir
 1. Hacé fork del repositorio
 2. Creá una rama (`git checkout -b feature/tu-feature`)
 3. Escribí tests para la funcionalidad nueva
@@ -261,17 +267,16 @@ La primera ejecución crea valores por defecto. Escritura atómica (temp + renam
 
 Consultá [`CONTRIBUTING.md`](CONTRIBUTING.md) para la guía completa.
 
-## Licencia
+### Licencia
 Licencia MIT — ver [LICENSE](LICENSE).
 
 </div>
 
 ---
 
-<!-- ===================== TECHNICAL DETAILS (language-agnostic) ===================== -->
-## Technical Details
+## Technical Details / Detalles Técnicos
 
-**Dependencies** (`Cargo.toml`):
+**Dependencies / Dependencias** (`Cargo.toml`):
 - `eframe` 0.35 + `egui` 0.35 — immediate-mode GUI framework with wgpu backend
 - `image` 0.25 — image decoding (PNG, JPEG, GIF, BMP, WebP, TIFF, AVIF)
 - `kamadak-exif` 0.6.1 — EXIF metadata extraction
@@ -280,12 +285,12 @@ Licencia MIT — ver [LICENSE](LICENSE).
 - `thiserror` — centralized error handling
 - `tracing` — structured logging
 
-**Release optimizations:** LTO enabled, single codegen unit, symbols stripped — targeting
-binaries under 20 MB.
+**Release optimizations / Optimizaciones de release:** LTO enabled, single codegen unit, symbols
+stripped — targeting binaries under 20 MB.
 
-**Platform:** Windows (primary, MSI installer), macOS and Linux (build from source).
+**Platform / Plataforma:** Windows (primary, MSI installer), macOS and Linux (build from source).
 
-**Version:** 0.2.2 | **MSRV:** Rust 1.92+
+**Version / Versión:** 0.2.2 | **MSRV:** Rust 1.92+
 
 <style>
   #content-es { display: none; }
