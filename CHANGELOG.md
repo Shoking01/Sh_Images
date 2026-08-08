@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-08
+
+### Added
+
+- **Edit-navigation confirm dialog** — when navigating to another image with unsaved edits, a dialog prompts Save / Discard / Cancel so changes aren't lost silently.
+
+### Fixed
+
+- **Edit-mode navigation holes** — opening a file or selecting a sidebar thumbnail while editing now routes through the confirm dialog instead of bypassing it; slideshow is paused while editing and its toggle is suppressed in edit mode.
+
 ## [0.2.2] - 2026-08-06
 
 ### Fixed
