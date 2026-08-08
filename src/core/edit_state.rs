@@ -87,6 +87,7 @@ impl EditState {
             || self.contrast != 0
             || self.saturation != 0
             || self.crop_rect.is_some()
+            || self.crop_mode
     }
 
     pub fn reset(&mut self) {
@@ -97,6 +98,24 @@ impl EditState {
         self.brightness = 0;
         self.contrast = 0;
         self.saturation = 0;
+    }
+}
+
+/// Outcome of a navigation request while in an edit session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditNavigation {
+    /// No unsaved changes (or not editing): switch images immediately.
+    Switch,
+    /// Unsaved changes exist: ask the user before switching.
+    Confirm,
+}
+
+/// Decide how to handle a navigation request given the edit session state.
+pub fn edit_navigation(editing: bool, has_changes: bool) -> EditNavigation {
+    if editing && has_changes {
+        EditNavigation::Confirm
+    } else {
+        EditNavigation::Switch
     }
 }
 
@@ -182,5 +201,51 @@ mod tests {
         let rect = CropRect::from_points(5.0, 5.0, 5.0, 5.0, 100, 100);
         assert_eq!(rect.w, 1);
         assert_eq!(rect.h, 1);
+    }
+
+    #[test]
+    fn edit_navigation_not_editing_switches() {
+        assert_eq!(edit_navigation(false, false), EditNavigation::Switch);
+        assert_eq!(edit_navigation(false, true), EditNavigation::Switch);
+    }
+
+    #[test]
+    fn edit_navigation_editing_but_clean_switches() {
+        assert_eq!(edit_navigation(true, false), EditNavigation::Switch);
+    }
+
+    #[test]
+    fn edit_navigation_editing_with_changes_confirms() {
+        assert_eq!(edit_navigation(true, true), EditNavigation::Confirm);
+    }
+
+    #[test]
+    fn edit_navigation_tracks_real_edit_state() {
+        let mut state = EditState::new(test_image());
+        assert_eq!(
+            edit_navigation(true, state.has_changes()),
+            EditNavigation::Switch
+        );
+        state.brightness = 40;
+        assert!(state.has_changes());
+        assert_eq!(
+            edit_navigation(true, state.has_changes()),
+            EditNavigation::Confirm
+        );
+    }
+
+    #[test]
+    fn crop_mode_counts_as_change() {
+        let mut state = EditState::new(test_image());
+        assert_eq!(
+            edit_navigation(true, state.has_changes()),
+            EditNavigation::Switch
+        );
+        state.crop_mode = true;
+        assert!(state.has_changes());
+        assert_eq!(
+            edit_navigation(true, state.has_changes()),
+            EditNavigation::Confirm
+        );
     }
 }

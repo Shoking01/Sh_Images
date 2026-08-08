@@ -13,7 +13,7 @@ use image::ImageFormat;
 
 use crate::config::settings::Settings;
 use crate::core::actions::Action;
-use crate::core::edit_state::EditState;
+use crate::core::edit_state::{EditNavigation, EditState};
 use crate::core::editor::{apply_all, apply_crop};
 use crate::core::image_cache::ImageCache;
 use crate::core::image_loader::load_image;
@@ -50,6 +50,11 @@ struct AnimState {
 }
 
 const THUMB_POOL_SIZE: usize = 3;
+#[derive(Debug, Clone)]
+enum PendingNavigation {
+    Index(usize),
+    Open(PathBuf),
+}
 pub struct ShImagesApp {
     settings: Settings,
     ctx: egui::Context,
@@ -83,6 +88,7 @@ pub struct ShImagesApp {
     slideshow_last_advance: Instant,
     pending_initial: Option<PathBuf>,
     default_viewer_dialog: bool,
+    pending_navigation: Option<PendingNavigation>,
     edit_state: Option<EditState>,
     edit_source_path: Option<PathBuf>,
     edit_texture: Option<egui::TextureHandle>,
@@ -191,6 +197,7 @@ impl ShImagesApp {
             slideshow_last_advance: Instant::now(),
             pending_initial: initial_path,
             default_viewer_dialog: false,
+            pending_navigation: None,
             edit_state: None,
             edit_source_path: None,
             edit_texture: None,
@@ -211,7 +218,17 @@ impl ShImagesApp {
             .pick_file();
         if let Some(path) = picked {
             let t = self.ctx.input(|i| i.time);
-            self.open_path(path, t);
+            let has_changes = self.edit_state.as_ref().is_some_and(EditState::has_changes);
+            match crate::core::edit_state::edit_navigation(self.edit_state.is_some(), has_changes) {
+                EditNavigation::Switch => {
+                    self.exit_edit_mode();
+                    self.open_path(path, t);
+                }
+                EditNavigation::Confirm => {
+                    self.pending_navigation = Some(PendingNavigation::Open(path));
+                    self.pause_slideshow();
+                }
+            }
         }
     }
 
@@ -239,6 +256,15 @@ impl ShImagesApp {
         }
     }
 
+    fn execute_pending_action(&mut self, action: PendingNavigation) {
+        match action {
+            PendingNavigation::Index(index) => self.navigate_to(index),
+            PendingNavigation::Open(path) => {
+                let t = self.ctx.input(|i| i.time);
+                self.open_path(path, t);
+            }
+        }
+    }
     fn start_load(&mut self, path: PathBuf) {
         if let Some((texture, image_size)) = self.texture_from_cache(&path) {
             tracing::info!(path = %path.display(), "image loaded from cache");
@@ -565,14 +591,22 @@ impl ShImagesApp {
             Action::ToggleTheme => self.toggle_theme(),
             Action::ToggleSidebar => self.toggle_sidebar(),
             Action::ToggleInfo => self.info_panel.show = !self.info_panel.show,
-            Action::ToggleSlideshow => self.toggle_slideshow(),
+            Action::ToggleSlideshow => {
+                if self.edit_state.is_none() {
+                    self.toggle_slideshow();
+                }
+            }
             Action::SlideshowFaster => self.change_slideshow_speed(true),
             Action::SlideshowSlower => self.change_slideshow_speed(false),
             Action::EditShortcuts => self.shortcut_dialog.open = true,
             Action::SetDefaultViewer => self.default_viewer_dialog = true,
             Action::Edit => self.enter_edit_mode(),
-            Action::SaveCopy => self.save_edit_copy(false),
-            Action::SaveAs => self.save_edit_copy(true),
+            Action::SaveCopy => {
+                self.save_edit_copy(false);
+            }
+            Action::SaveAs => {
+                self.save_edit_copy(true);
+            }
             Action::CancelEdit => self.exit_edit_mode(),
             Action::ResetEdit => self.reset_edit(),
             Action::ApplyCrop => self.apply_crop_edit(),
@@ -600,6 +634,7 @@ impl ShImagesApp {
         }
     }
     fn enter_edit_mode(&mut self) {
+        self.pause_slideshow();
         let Some(path) = self
             .navigation
             .as_ref()
@@ -628,12 +663,12 @@ impl ShImagesApp {
         self.edit_texture = None;
         tracing::info!("exited edit mode");
     }
-    fn save_edit_copy(&mut self, choose_path: bool) {
+    fn save_edit_copy(&mut self, choose_path: bool) -> bool {
         let Some(state) = &self.edit_state else {
-            return;
+            return false;
         };
         let Some(ref source_path) = self.edit_source_path else {
-            return;
+            return false;
         };
         let final_image = apply_all(
             &state.original,
@@ -688,12 +723,16 @@ impl ShImagesApp {
                     self.toasts
                         .push(format!("{} {}", tr.save_success, path.display()), t);
                     self.exit_edit_mode();
+                    true
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "failed to save edited image");
                     self.toasts.push(format!("{} {e}", tr.save_error), t);
+                    false
                 }
             }
+        } else {
+            false
         }
     }
     fn reset_edit(&mut self) {
@@ -836,6 +875,45 @@ impl ShImagesApp {
             self.default_viewer_dialog = false;
         }
     }
+    fn show_edit_navigation_dialog(&mut self, ui: &mut egui::Ui, action: PendingNavigation) {
+        let mut save = false;
+        let mut discard = false;
+        let mut cancelled = false;
+        let tr = self.settings.language.translations();
+
+        egui::Window::new(tr.edit_navigation_title)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ui.ctx(), |ui| {
+                ui.label(tr.edit_navigation_body);
+                ui.add_space(16.0);
+                ui.horizontal(|ui| {
+                    if ui.button(tr.save_and_switch).clicked() {
+                        save = true;
+                    }
+                    if ui.button(tr.discard_and_switch).clicked() {
+                        discard = true;
+                    }
+                    if ui.button(tr.cancel).clicked() {
+                        cancelled = true;
+                    }
+                });
+            });
+
+        if save {
+            self.pending_navigation = None;
+            if self.save_edit_copy(false) {
+                self.execute_pending_action(action);
+            }
+        } else if discard {
+            self.pending_navigation = None;
+            self.exit_edit_mode();
+            self.execute_pending_action(action);
+        } else if cancelled {
+            self.pending_navigation = None;
+        }
+    }
 }
 fn make_texture(ctx: &egui::Context, image: &DynamicImage) -> egui::TextureHandle {
     let size = [image.width() as usize, image.height() as usize];
@@ -908,7 +986,20 @@ impl eframe::App for ShImagesApp {
             if let Some(nav) = &self.navigation {
                 let selected = self.sidebar.show(ui, nav, &self.thumb_cache);
                 if let Some(index) = selected {
-                    self.navigate_to(index);
+                    let has_changes = self.edit_state.as_ref().is_some_and(EditState::has_changes);
+                    match crate::core::edit_state::edit_navigation(
+                        self.edit_state.is_some(),
+                        has_changes,
+                    ) {
+                        EditNavigation::Switch => {
+                            self.exit_edit_mode();
+                            self.navigate_to(index);
+                        }
+                        EditNavigation::Confirm => {
+                            self.pending_navigation = Some(PendingNavigation::Index(index));
+                            self.pause_slideshow();
+                        }
+                    }
                 }
             }
         }
@@ -1047,6 +1138,10 @@ impl eframe::App for ShImagesApp {
 
         if self.default_viewer_dialog {
             self.show_default_viewer_dialog(ui);
+        }
+
+        if let Some(action) = self.pending_navigation.clone() {
+            self.show_edit_navigation_dialog(ui, action);
         }
 
         self.handle_shortcuts(ui);

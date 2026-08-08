@@ -73,6 +73,10 @@ pub struct Translations {
     pub default_viewer_dialog_formats: &'static str,
     pub default_viewer_dialog_continue: &'static str,
     pub continue_btn: &'static str,
+    pub edit_navigation_title: &'static str,
+    pub edit_navigation_body: &'static str,
+    pub save_and_switch: &'static str,
+    pub discard_and_switch: &'static str,
     pub save_success: &'static str,
     pub save_error: &'static str,
     pub default_viewer_success: &'static str,
@@ -154,6 +158,11 @@ const ES: Translations = Translations {
     default_viewer_dialog_formats: "Formatos que se asociarán:",
     default_viewer_dialog_continue: "Al continuar se abrirá la Configuración de Windows.\nBusca \"Sh_Images\" en la lista y selecciónalo como predeterminado.",
     continue_btn: "Continuar",
+
+    edit_navigation_title: "Cambios sin guardar",
+    edit_navigation_body: "¿Quieres guardar los cambios antes de cambiar de imagen?",
+    save_and_switch: "Guardar y cambiar",
+    discard_and_switch: "No guardar y cambiar",
 
     save_success: "Guardado:",
     save_error: "No se pudo guardar:",
@@ -240,6 +249,11 @@ const EN: Translations = Translations {
     default_viewer_dialog_formats: "Formats to associate:",
     default_viewer_dialog_continue: "Continuing will open Windows Settings.\nFind \"Sh_Images\" in the list and select it as default.",
     continue_btn: "Continue",
+
+    edit_navigation_title: "Unsaved changes",
+    edit_navigation_body: "Do you want to save your changes before switching images?",
+    save_and_switch: "Save and switch",
+    discard_and_switch: "Don't save and switch",
 
     save_success: "Saved:",
     save_error: "Could not save:",
