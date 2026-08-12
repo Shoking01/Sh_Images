@@ -11,6 +11,10 @@ pub enum ShImagesError {
     UnsupportedFormat(String),
     #[error("exif error: {0}")]
     Exif(String),
+    /// Fallo del pipeline de video: backend ausente, códec no soportado,
+    /// contenedor ilegible.
+    #[error("media error: {0}")]
+    Media(String),
 }
 pub type Result<T> = std::result::Result<T, ShImagesError>;
 
@@ -42,6 +46,16 @@ mod tests {
         assert!(ShImagesError::Io(io::Error::other("boom"))
             .to_string()
             .contains("io error"));
+    }
+
+    #[test]
+    fn media_error_displays_message() {
+        let err = ShImagesError::Media("Media Foundation no disponible".to_string());
+        assert_eq!(
+            err.to_string(),
+            "media error: Media Foundation no disponible"
+        );
+        assert!(matches!(err, ShImagesError::Media(_)));
     }
 
     #[test]

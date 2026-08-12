@@ -18,6 +18,7 @@ use crate::core::editor::{apply_all, apply_crop};
 use crate::core::image_cache::ImageCache;
 use crate::core::image_loader::load_image;
 use crate::core::lang::Language;
+use crate::core::media::{is_image, is_video, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS};
 use crate::core::navigation::{Navigation, SUPPORTED_EXTENSIONS};
 use crate::core::preload::{preload_targets, PRELOAD_DEPTH};
 use crate::core::shortcuts::ShortcutMap;
@@ -25,6 +26,7 @@ use crate::core::slideshow;
 use crate::core::thumb_queue::ThumbQueue;
 use crate::core::thumbnail_cache::ThumbnailCache;
 use crate::core::thumbnail_gen::{generate_thumbnail_capped, THUMB_MAX};
+use crate::core::video::{autoplay, thumbnail as video_thumbnail, VideoPlayer};
 use crate::core::view::{Vec2, ViewTransform};
 use crate::ui::{
     editor::{self},
@@ -35,7 +37,7 @@ use crate::ui::{
     statusbar::StatusInfo,
     theme,
     toast::Toasts,
-    toolbar, viewer,
+    toolbar, video_controls, viewer,
 };
 use crate::utils::errors::Result;
 use crate::utils::paths::settings_path;
@@ -89,6 +91,9 @@ pub struct ShImagesApp {
     pending_initial: Option<PathBuf>,
     default_viewer_dialog: bool,
     pending_navigation: Option<PendingNavigation>,
+    /// Reproductor activo. Al soltarlo se para el hilo y se hace join, así que
+    /// nunca hay dos pistas de audio sonando ni hilos con recursos COM vivos.
+    video: Option<VideoPlayer>,
     edit_state: Option<EditState>,
     edit_source_path: Option<PathBuf>,
     edit_texture: Option<egui::TextureHandle>,
@@ -119,13 +124,17 @@ impl ShImagesApp {
             std::thread::spawn(move || {
                 while let Some(path) = queue.pop() {
                     let start_epoch = epoch.load(Ordering::Relaxed);
-                    let image = load_image(&path);
+                    let image = if is_video(&path) {
+                        video_thumbnail::generate(&path, THUMB_MAX)
+                    } else {
+                        load_image(&path)
+                            .map(|image| generate_thumbnail_capped(image.first_frame(), THUMB_MAX))
+                    };
                     if epoch.load(Ordering::Relaxed) != start_epoch {
                         continue;
                     }
                     match image {
-                        Ok(image) => {
-                            let thumb = generate_thumbnail_capped(image.first_frame(), THUMB_MAX);
+                        Ok(thumb) => {
                             cache.insert(path.clone(), thumb);
                         }
                         Err(e) => {
@@ -198,6 +207,7 @@ impl ShImagesApp {
             pending_initial: initial_path,
             default_viewer_dialog: false,
             pending_navigation: None,
+            video: None,
             edit_state: None,
             edit_source_path: None,
             edit_texture: None,
@@ -214,7 +224,9 @@ impl ShImagesApp {
 
     fn open_dialog(&mut self) {
         let picked = rfd::FileDialog::new()
-            .add_filter("Imágenes", SUPPORTED_EXTENSIONS)
+            .add_filter("Imágenes y video", SUPPORTED_EXTENSIONS)
+            .add_filter("Imágenes", IMAGE_EXTENSIONS)
+            .add_filter("Video", VIDEO_EXTENSIONS)
             .pick_file();
         if let Some(path) = picked {
             let t = self.ctx.input(|i| i.time);
@@ -266,6 +278,13 @@ impl ShImagesApp {
         }
     }
     fn start_load(&mut self, path: PathBuf) {
+        // El video no pasa por `ImageCache` ni por `load_image`: tiene su propio
+        // pipeline de streaming.
+        if is_video(&path) {
+            self.start_video(path);
+            return;
+        }
+        self.stop_video();
         if let Some((texture, image_size)) = self.texture_from_cache(&path) {
             tracing::info!(path = %path.display(), "image loaded from cache");
             self.apply_decoded(&path, texture, image_size);
@@ -276,6 +295,158 @@ impl ShImagesApp {
             return;
         }
         self.spawn_load(path, false);
+    }
+
+    /// Para y libera el reproductor actual.
+    ///
+    /// Se llama **antes** de abrir nada nuevo: si no, el video saliente y el
+    /// entrante solaparían audio durante el arranque del segundo.
+    fn stop_video(&mut self) {
+        if self.video.take().is_some() {
+            tracing::debug!("reproductor de video detenido");
+        }
+    }
+
+    fn start_video(&mut self, path: PathBuf) {
+        if autoplay::should_stop_before_opening(self.video.is_some()) {
+            self.stop_video();
+        }
+        let viewport = self
+            .last_viewport
+            .map(|v| (v.x.max(1.0) as u32, v.y.max(1.0) as u32))
+            .unwrap_or((1920, 1080));
+        let decision =
+            autoplay::autoplay_on_open(self.settings.video_autoplay, true, self.slideshow_active);
+        tracing::info!(path = %path.display(), autoplay = decision.should_play(), "abriendo video");
+        let player = VideoPlayer::open(
+            &path,
+            viewport,
+            self.settings.video_volume_percent,
+            decision.should_play(),
+        );
+        self.video = Some(player);
+        self.texture = None;
+        self.last_applied = Some(path);
+        self.user_interacted = false;
+        self.last_viewport = None;
+        self.ctx.request_repaint();
+    }
+
+    /// Dibuja la barra de controles y aplica lo que pidió el usuario.
+    ///
+    /// En panel propio, encima de la barra de estado: si estuviera sobre el
+    /// visor, cada clic contaría como zoom o arrastre y pararía el pase.
+    fn show_video_controls(&mut self, ui: &mut egui::Ui) {
+        let Some(player) = self.video.as_ref() else {
+            return;
+        };
+        let now = Instant::now();
+        let snapshot = player.snapshot(now);
+        let lang = self.settings.language;
+
+        if let Some(error) = snapshot.error.clone() {
+            let t = lang.translations();
+            egui::Panel::bottom("video_controls")
+                .exact_size(video_controls::panel_height())
+                .show(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        ui.add_space(8.0);
+                        ui.colored_label(
+                            ui.visuals().error_fg_color,
+                            format!("{} {error}", t.video_error),
+                        );
+                    });
+                });
+            return;
+        }
+
+        let mut response = video_controls::VideoControlsResponse::default();
+        egui::Panel::bottom("video_controls")
+            .exact_size(video_controls::panel_height())
+            .show(ui, |ui| {
+                response = video_controls::show(ui, &snapshot, lang);
+            });
+
+        if !response.any() {
+            return;
+        }
+        let Some(player) = self.video.as_mut() else {
+            return;
+        };
+        if response.toggle_play {
+            player.toggle_play_pause(now);
+        }
+        if response.seek_forward {
+            player.seek_forward(now);
+        }
+        if response.seek_backward {
+            player.seek_backward(now);
+        }
+        if let Some(target) = response.seek_to {
+            player.seek_to(target, now);
+        }
+        if response.toggle_mute {
+            player.toggle_mute();
+        }
+        if let Some(v) = response.set_volume {
+            player.set_volume(v);
+            self.persist_video_volume(v);
+        }
+        self.ctx.request_repaint();
+    }
+
+    fn persist_video_volume(&mut self, volume: u8) {
+        self.settings.video_volume_percent = volume;
+        if let Ok(path) = settings_path() {
+            if let Err(e) = self.settings.save(&path) {
+                tracing::warn!(error = %e, "no se pudo guardar el volumen");
+            }
+        }
+    }
+
+    /// Avanza el reproductor un frame y actualiza la textura.
+    ///
+    /// Usa `set_partial` sobre la textura existente en vez de `load_texture`:
+    /// a 1080p30 eso ahorra 30 `create_texture` y 30 `create_bind_group` por
+    /// segundo. El buffer de píxeles vuelve al decodificador para reutilizarse.
+    fn tick_video(&mut self) {
+        let now = Instant::now();
+        let Some(player) = self.video.as_mut() else {
+            return;
+        };
+        let frame = player.tick(now);
+        let wait = player.repaint_after(now);
+        if let Some(frame) = frame {
+            let size = [frame.width as usize, frame.height as usize];
+            // El video es opaco, así que premultiplicado equivale a directo, y
+            // esta ruta no lleva una rama por píxel como la sin premultiplicar.
+            let image = egui::ColorImage::from_rgba_premultiplied(size, &frame.pixels);
+            let reuse = matches!(self.texture.as_ref(), Some(t) if t.size() == size);
+            if reuse {
+                if let Some(tex) = self.texture.as_mut() {
+                    tex.set_partial([0, 0], image, egui::TextureOptions::LINEAR);
+                }
+            } else {
+                self.texture = Some(self.ctx.load_texture(
+                    "video",
+                    image,
+                    egui::TextureOptions::LINEAR,
+                ));
+                self.transform = ViewTransform::new(
+                    Vec2::new(frame.width as f32, frame.height as f32),
+                    Vec2::ZERO,
+                );
+                self.user_interacted = false;
+                self.last_viewport = None;
+            }
+            if let Some(player) = self.video.as_ref() {
+                player.recycle(frame);
+            }
+        }
+        // En pausa no se pide repintado: es la condición de 0 % de CPU.
+        if let Some(wait) = wait {
+            self.ctx.request_repaint_after(wait);
+        }
     }
 
     fn texture_from_cache(&self, path: &std::path::Path) -> Option<(egui::TextureHandle, Vec2)> {
@@ -398,6 +569,11 @@ impl ShImagesApp {
         }
     }
     fn request_exif(&self, path: &Path) {
+        // kamadak-exif no lee contenedores de video: despertaría el worker para
+        // devolver un error que el panel muestra como "sin datos".
+        if is_video(path) {
+            return;
+        }
         let present = self
             .exif_cache
             .lock()
@@ -471,8 +647,8 @@ impl ShImagesApp {
         let Some(nav) = &self.navigation else {
             return;
         };
-        for image_path in &nav.images {
-            self.thumb_queue.push(image_path.clone());
+        for media_path in &nav.images {
+            self.thumb_queue.push(media_path.clone());
         }
     }
     fn toggle_slideshow(&mut self) {
@@ -522,7 +698,9 @@ impl ShImagesApp {
             |p| self.cache.contains(p),
             |p| self.in_flight_guard().contains(p),
         );
-        for path in targets {
+        // Los vecinos de video no se precargan: `spawn_load` levantaría un
+        // thread por cada uno sólo para que `load_image` falle.
+        for path in targets.into_iter().filter(|p| is_image(p)) {
             self.spawn_load(path, true);
         }
     }
@@ -600,7 +778,13 @@ impl ShImagesApp {
             Action::SlideshowSlower => self.change_slideshow_speed(false),
             Action::EditShortcuts => self.shortcut_dialog.open = true,
             Action::SetDefaultViewer => self.default_viewer_dialog = true,
-            Action::Edit => self.enter_edit_mode(),
+            // Editar un video no tiene sentido: no hay entrada en ImageCache y
+            // `enter_edit_mode` mostraría un "no se pudo cargar" engañoso.
+            Action::Edit => {
+                if self.video.is_none() {
+                    self.enter_edit_mode();
+                }
+            }
             Action::SaveCopy => {
                 self.save_edit_copy(false);
             }
@@ -612,6 +796,46 @@ impl ShImagesApp {
             Action::ApplyCrop => self.apply_crop_edit(),
             Action::SetLangEs => self.set_language(Language::Es),
             Action::SetLangEn => self.set_language(Language::En),
+            Action::VideoPlayPause => {
+                let now = Instant::now();
+                if let Some(v) = self.video.as_mut() {
+                    v.toggle_play_pause(now);
+                    self.ctx.request_repaint();
+                }
+            }
+            Action::VideoSeekForward => {
+                let now = Instant::now();
+                if let Some(v) = self.video.as_mut() {
+                    v.seek_forward(now);
+                    self.ctx.request_repaint();
+                }
+            }
+            Action::VideoSeekBackward => {
+                let now = Instant::now();
+                if let Some(v) = self.video.as_mut() {
+                    v.seek_backward(now);
+                    self.ctx.request_repaint();
+                }
+            }
+            Action::VideoVolumeUp => {
+                if let Some(v) = self.video.as_mut() {
+                    v.volume_up();
+                    let vol = v.volume();
+                    self.persist_video_volume(vol);
+                }
+            }
+            Action::VideoVolumeDown => {
+                if let Some(v) = self.video.as_mut() {
+                    v.volume_down();
+                    let vol = v.volume();
+                    self.persist_video_volume(vol);
+                }
+            }
+            Action::VideoToggleMute => {
+                if let Some(v) = self.video.as_mut() {
+                    v.toggle_mute();
+                }
+            }
         }
     }
     fn set_language(&mut self, lang: Language) {
@@ -705,7 +929,14 @@ impl ShImagesApp {
         };
 
         if let Some(path) = save_path {
-            let format = guess_format(&path);
+            let t = self.ctx.input(|i| i.time);
+            let tr = self.settings.language.translations();
+            let Some(format) = guess_format(&path) else {
+                tracing::warn!(path = %path.display(), "extensión de destino no es de imagen");
+                self.toasts
+                    .push(format!("{} {}", tr.save_error, path.display()), t);
+                return false;
+            };
             let result = match format {
                 ImageFormat::Jpeg => final_image
                     .to_rgb8()
@@ -715,8 +946,6 @@ impl ShImagesApp {
                     .save_with_format(&path, ImageFormat::Bmp),
                 _ => final_image.save(&path),
             };
-            let t = self.ctx.input(|i| i.time);
-            let tr = self.settings.language.translations();
             match result {
                 Ok(()) => {
                     tracing::info!(path = %path.display(), "saved edited image");
@@ -921,20 +1150,26 @@ fn make_texture(ctx: &egui::Context, image: &DynamicImage) -> egui::TextureHandl
     let color_image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
     ctx.load_texture("image", color_image, egui::TextureOptions::LINEAR)
 }
-fn guess_format(path: &Path) -> ImageFormat {
+/// Formato de guardado deducido de la extensión de destino.
+///
+/// Devuelve `None` para extensiones que no son de imagen. Antes tenía un
+/// `_ => ImageFormat::Png` que, con una ruta `.mp4`, habría escrito un PNG con
+/// extensión de video sin avisar.
+fn guess_format(path: &Path) -> Option<ImageFormat> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
     match ext.as_str() {
-        "jpg" | "jpeg" => ImageFormat::Jpeg,
-        "bmp" => ImageFormat::Bmp,
-        "gif" => ImageFormat::Gif,
-        "tiff" | "tif" => ImageFormat::Tiff,
-        "webp" => ImageFormat::WebP,
-        "avif" => ImageFormat::Avif,
-        _ => ImageFormat::Png,
+        "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
+        "bmp" => Some(ImageFormat::Bmp),
+        "gif" => Some(ImageFormat::Gif),
+        "tiff" | "tif" => Some(ImageFormat::Tiff),
+        "webp" => Some(ImageFormat::WebP),
+        "avif" => Some(ImageFormat::Avif),
+        "png" => Some(ImageFormat::Png),
+        _ => None,
     }
 }
 
@@ -955,11 +1190,20 @@ impl eframe::App for ShImagesApp {
         self.poll_thumbnails();
         self.poll_exif();
         self.tick_animation();
+        self.tick_video();
 
         if self.slideshow_active && self.navigation.is_some() {
-            if slideshow::elapsed_reached(
+            // Un video en reproducción retiene el pase hasta terminar; si no,
+            // un clip de 3 minutos se saltaría a los 5 segundos.
+            let video_state = self.video.as_ref().map(|v| {
+                let now = Instant::now();
+                (v.state(), v.position(now))
+            });
+            if autoplay::slideshow_should_advance(
+                video_state,
                 self.slideshow_last_advance.elapsed(),
                 self.slideshow_interval,
+                true,
             ) {
                 self.advance_slideshow();
             }
@@ -981,6 +1225,7 @@ impl eframe::App for ShImagesApp {
                 statusbar::show(ui, &info);
             }
         }
+        self.show_video_controls(ui);
 
         if self.sidebar.show {
             if let Some(nav) = &self.navigation {
@@ -1145,5 +1390,33 @@ impl eframe::App for ShImagesApp {
         }
 
         self.handle_shortcuts(ui);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guess_format_maps_known_image_extensions() {
+        assert_eq!(guess_format(Path::new("a.png")), Some(ImageFormat::Png));
+        assert_eq!(guess_format(Path::new("a.JPG")), Some(ImageFormat::Jpeg));
+        assert_eq!(guess_format(Path::new("a.jpeg")), Some(ImageFormat::Jpeg));
+        assert_eq!(guess_format(Path::new("a.bmp")), Some(ImageFormat::Bmp));
+        assert_eq!(guess_format(Path::new("a.tif")), Some(ImageFormat::Tiff));
+        assert_eq!(guess_format(Path::new("a.webp")), Some(ImageFormat::WebP));
+        assert_eq!(guess_format(Path::new("a.avif")), Some(ImageFormat::Avif));
+    }
+
+    #[test]
+    fn guess_format_rejects_video_and_unknown_extensions() {
+        // Regresión: antes devolvía Png y guardaba un PNG llamado .mp4.
+        for name in ["a.mp4", "a.mov", "a.m4v", "a.txt", "sin_extension"] {
+            assert_eq!(
+                guess_format(Path::new(name)),
+                None,
+                "{name} no debería tener formato de guardado"
+            );
+        }
     }
 }

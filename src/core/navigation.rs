@@ -2,8 +2,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::utils::errors::{Result, ShImagesError};
+/// Todo lo que `Navigation` lista en una carpeta: imágenes y videos.
+///
+/// Es la unión literal de `media::IMAGE_EXTENSIONS` y `media::VIDEO_EXTENSIONS`
+/// (los slices `const` no se concatenan en `const fn`); el test
+/// `supported_extensions_is_union_of_image_and_video` en `core::media` impide
+/// que se desincronicen. Los consumidores que sólo saben tratar imágenes deben
+/// filtrar con `media::media_kind`, no con esta constante.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "bmp", "webp", "tiff", "tif", "avif",
+    "png", "jpg", "jpeg", "gif", "bmp", "webp", "tiff", "tif", "avif", "mp4", "m4v", "mov",
 ];
 #[derive(Debug)]
 pub struct Navigation {
@@ -69,7 +76,9 @@ mod tests {
     fn setup_folder() -> (tempfile::TempDir, PathBuf) {
         let dir = tempdir().unwrap();
         let folder = dir.path().to_path_buf();
-        for name in ["b.png", "a.jpg", "c.txt", "d.JPG"] {
+        // e.mp4 incluido a propósito: sin un video aquí, los tests de filtrado
+        // seguirían pasando aunque SUPPORTED_EXTENSIONS dejase de listarlos.
+        for name in ["b.png", "a.jpg", "c.txt", "d.JPG", "e.mp4"] {
             fs::write(folder.join(name), b"x").unwrap();
         }
         (dir, folder)
@@ -79,7 +88,7 @@ mod tests {
     fn from_folder_filters_by_extension() {
         let (_d, folder) = setup_folder();
         let nav = Navigation::from_folder(&folder.join("a.jpg"), SUPPORTED_EXTENSIONS).unwrap();
-        assert_eq!(nav.images.len(), 3); // b.png, a.jpg, d.JPG (c.txt excluido)
+        assert_eq!(nav.images.len(), 4); // a.jpg, b.png, d.JPG, e.mp4 (c.txt excluido)
         for p in &nav.images {
             assert!(has_supported_extension(p, SUPPORTED_EXTENSIONS));
         }
@@ -94,7 +103,7 @@ mod tests {
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, vec!["a.jpg", "b.png", "d.JPG"]);
+        assert_eq!(names, vec!["a.jpg", "b.png", "d.JPG", "e.mp4"]);
     }
 
     #[test]
@@ -134,6 +143,8 @@ mod tests {
         nav.next();
         assert_eq!(nav.current, 2);
         nav.next();
+        assert_eq!(nav.current, 3);
+        nav.next();
         assert_eq!(nav.current, 0);
     }
 
@@ -142,7 +153,7 @@ mod tests {
         let (_d, folder) = setup_folder();
         let mut nav = Navigation::from_folder(&folder.join("a.jpg"), SUPPORTED_EXTENSIONS).unwrap();
         nav.prev();
-        assert_eq!(nav.current, 2);
+        assert_eq!(nav.current, 3);
     }
 
     #[test]
@@ -159,7 +170,7 @@ mod tests {
 
     #[test]
     fn neighbor_paths_returns_prev_and_next() {
-        let (_d, folder) = setup_folder(); // images: a.jpg, b.png, d.JPG
+        let (_d, folder) = setup_folder(); // images: a.jpg, b.png, d.JPG, e.mp4
         let nav = Navigation::from_folder(&folder.join("b.png"), SUPPORTED_EXTENSIONS).unwrap();
         let [prev, next] = nav.neighbor_paths();
         assert_eq!(prev.unwrap(), &folder.join("a.jpg"));

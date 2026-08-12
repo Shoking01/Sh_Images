@@ -20,9 +20,34 @@ use resvg::usvg::{self, Tree as UsvgTree};
 const ICON_SIZES: &[u32] = &[16, 32, 48, 64, 128, 256];
 const VIEWBOX_SIZE: f32 = 512.0;
 
+/// DLLs de Media Foundation que se enlazan con carga diferida.
+///
+/// El crate `windows` las enlaza por tabla de importación estática. Las
+/// ediciones **N** de Windows no traen Media Foundation hasta que se instala el
+/// Media Feature Pack, y con import estático el cargador del sistema aborta el
+/// proceso **antes de `main()`**: la app no arrancaría ni para ver un PNG.
+/// Con `/DELAYLOAD` la resolución se pospone a la primera llamada, y
+/// `core::video::mf::is_available()` la comprueba antes de tocar nada.
+#[cfg(target_env = "msvc")]
+const DELAY_LOADED_DLLS: &[&str] = &["mfplat.dll", "mfreadwrite.dll"];
+
+#[cfg(target_env = "msvc")]
+fn configure_delay_load() {
+    for dll in DELAY_LOADED_DLLS {
+        println!("cargo:rustc-link-arg-bins=/DELAYLOAD:{dll}");
+    }
+    // delayimp.lib provee el thunk __delayLoadHelper2 que hace la resolución.
+    println!("cargo:rustc-link-arg-bins=delayimp.lib");
+}
+
+#[cfg(not(target_env = "msvc"))]
+fn configure_delay_load() {}
+
 fn main() {
     println!("cargo:rerun-if-changed=assets/icon.svg");
     println!("cargo:rerun-if-changed=build.rs");
+
+    configure_delay_load();
 
     let svg_path = PathBuf::from("assets/icon.svg");
     let svg_data = match fs::read(&svg_path) {

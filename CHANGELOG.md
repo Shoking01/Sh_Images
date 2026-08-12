@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Video playback (Windows)** — MP4, M4V and MOV play in the viewer with audio,
+  using Windows Media Foundation. No codecs are bundled: the system decoder is
+  used, so the binary grows by only ~205 KB and no patent-encumbered decoder is
+  redistributed. Linux and macOS build a stub that reports the format as
+  unsupported.
+- **Playback controls** — play/pause, ±5 s seek, volume up/down with a
+  perceptual (quadratic) curve, mute, a seekable progress bar and an
+  `MM:SS / MM:SS` position readout, in their own panel above the status bar.
+- **Autoplay** — enabled by default; configurable via `video_autoplay` in
+  `settings.toml`. Volume persists across sessions as `video_volume_percent`.
+- **Video shortcuts** — `Space` play/pause, `Ctrl+→` / `Ctrl+←` seek ±5 s,
+  `Ctrl+↑` / `Ctrl+↓` volume, `M` mute. All configurable in the shortcut dialog.
+- **Slideshow awareness** — the slideshow waits for a playing video to finish
+  instead of skipping past it after the interval.
+- **MSRV job in CI** — `rust-version = "1.92"` was declared but never verified.
+  CI now also runs `cargo test --release` and `cargo bench --no-run`.
+
+### Changed
+
+- **Texture uploads reuse the existing allocation** — video frames go through
+  `TextureHandle::set_partial` instead of allocating a new texture per frame,
+  avoiding ~30 texture and bind-group creations per second at 1080p30.
+- **`MediaKind` separation** — thumbnail generation, neighbour preloading and
+  EXIF reading now skip video files instead of spawning work that can only
+  fail. `SUPPORTED_EXTENSIONS` is the union of the image and video lists, with a
+  test that keeps them in sync.
+
+### Fixed
+
+- **`guess_format` no longer defaults to PNG** — saving to a path with a
+  non-image extension wrote a PNG under the wrong extension without warning.
+- **New shortcuts reach existing users** — `ShortcutMap::fill_missing_defaults`
+  assigns defaults to actions added after a `settings.toml` was written;
+  previously they stayed unbound until "reset all".
+- **Duplicate default shortcuts are now caught** — `ShortcutMap::defaults()`
+  collects without conflict detection, so two actions could silently share a
+  binding. Covered by a new test.
+- **Multi-track containers decode correctly** — `ReadSample` reports the *real*
+  stream index, never the `MF_SOURCE_READER_FIRST_*_STREAM` pseudo-constants
+  used to configure formats. Comparing the two classified every video frame as
+  audio. Stream indices are now resolved by reading each stream's major type at
+  open time, which also fixes files with several audio tracks (game recorders
+  typically write game audio and microphone as separate tracks, with video not
+  at index 0).
+
 ## [0.2.3] - 2026-08-08
 
 ### Added

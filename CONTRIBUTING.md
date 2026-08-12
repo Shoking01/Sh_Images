@@ -24,7 +24,7 @@
 ### Pull Request Checklist
 - [ ] `cargo fmt --check` passes
 - [ ] `cargo clippy --all-targets -- -D warnings` passes
-- [ ] `cargo test` passes (all 181+ tests)
+- [ ] `cargo test` passes (all 430+ tests)
 - [ ] `cargo test --release` passes
 - [ ] New public functions have docstrings (`///`)
 - [ ] New modules are documented if architecturally significant

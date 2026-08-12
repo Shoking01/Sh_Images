@@ -6,6 +6,10 @@ use crate::core::actions::Action;
 pub enum KeyCode {
     ArrowLeft,
     ArrowRight,
+    ArrowUp,
+    ArrowDown,
+    Space,
+    KeyM,
     KeyF,
     KeyH,
     KeyI,
@@ -88,6 +92,35 @@ impl ShortcutMap {
     pub fn reset(&mut self) {
         *self = Self::defaults();
     }
+    /// Asigna su atajo por defecto a las acciones que no tengan ninguno.
+    ///
+    /// Necesario tras cargar un `settings.toml` de una versión anterior: serde
+    /// deserializa el mapa guardado tal cual, así que las acciones añadidas
+    /// después se quedarían sin atajo hasta que el usuario pulsara
+    /// "restablecer todos". Respeta las personalizaciones existentes y nunca
+    /// crea un conflicto: si el atajo por defecto ya está ocupado, se deja la
+    /// acción sin asignar.
+    pub fn fill_missing_defaults(&mut self) -> usize {
+        let mut added = 0;
+        for action in Action::all() {
+            if self.bindings.contains_key(&action) {
+                continue;
+            }
+            let Some(binding) = action.default_shortcut() else {
+                continue;
+            };
+            if self.action_for(binding).is_some() {
+                tracing::debug!(
+                    ?action,
+                    "el atajo por defecto ya está en uso; la acción queda sin asignar"
+                );
+                continue;
+            }
+            self.bindings.insert(action, binding);
+            added += 1;
+        }
+        added
+    }
     pub fn iter(&self) -> impl Iterator<Item = (Action, KeyBinding)> + '_ {
         self.bindings.iter().map(|(a, b)| (*a, *b))
     }
@@ -98,6 +131,10 @@ impl KeyCode {
         match self {
             KeyCode::ArrowLeft => "←",
             KeyCode::ArrowRight => "→",
+            KeyCode::ArrowUp => "↑",
+            KeyCode::ArrowDown => "↓",
+            KeyCode::Space => "Espacio",
+            KeyCode::KeyM => "M",
             KeyCode::KeyF => "F",
             KeyCode::KeyH => "H",
             KeyCode::KeyI => "I",
@@ -116,6 +153,10 @@ impl KeyCode {
         match s {
             "←" => Some(KeyCode::ArrowLeft),
             "→" => Some(KeyCode::ArrowRight),
+            "↑" => Some(KeyCode::ArrowUp),
+            "↓" => Some(KeyCode::ArrowDown),
+            "Espacio" => Some(KeyCode::Space),
+            "M" => Some(KeyCode::KeyM),
             "F" => Some(KeyCode::KeyF),
             "H" => Some(KeyCode::KeyH),
             "I" => Some(KeyCode::KeyI),
@@ -167,22 +208,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn defaults_have_no_duplicate_bindings() {
+        // `ShortcutMap::defaults()` usa `.collect()` sin detectar conflictos:
+        // dos acciones podrían compartir combinación y `action_for` devolvería
+        // sólo la primera, en silencio. Este es el único test que lo caza.
+        let map = ShortcutMap::defaults();
+        let mut seen: std::collections::HashMap<KeyBinding, Action> =
+            std::collections::HashMap::new();
+        for (action, binding) in map.iter() {
+            if let Some(other) = seen.insert(binding, action) {
+                panic!("{action:?} y {other:?} comparten el atajo {binding}");
+            }
+        }
+    }
+
+    #[test]
+    fn fill_missing_defaults_recovers_new_actions_in_an_old_config() {
+        // Simula un settings.toml de una versión anterior: sin esto, las
+        // acciones añadidas después se quedan sin atajo para siempre.
+        let mut map = ShortcutMap::defaults();
+        let removed = map.bindings.remove(&Action::VideoPlayPause);
+        assert!(removed.is_some());
+        assert!(map.get(Action::VideoPlayPause).is_none());
+
+        let added = map.fill_missing_defaults();
+        assert_eq!(added, 1);
+        assert_eq!(
+            map.get(Action::VideoPlayPause),
+            Action::VideoPlayPause.default_shortcut().as_ref()
+        );
+    }
+
+    #[test]
+    fn fill_missing_defaults_preserves_user_customizations() {
+        let mut map = ShortcutMap::defaults();
+        let custom = KeyBinding::new(KeyCode::KeyM, Modifiers::CtrlShift);
+        map.bindings.insert(Action::VideoPlayPause, custom);
+        map.fill_missing_defaults();
+        assert_eq!(
+            map.get(Action::VideoPlayPause),
+            Some(&custom),
+            "no debe pisar lo que el usuario configuró"
+        );
+    }
+
+    #[test]
+    fn fill_missing_defaults_never_creates_a_conflict() {
+        let mut map = ShortcutMap::defaults();
+        map.bindings.remove(&Action::VideoPlayPause);
+        // Otra acción ocupa ya el atajo por defecto de VideoPlayPause.
+        let space = KeyBinding::new(KeyCode::Space, Modifiers::None);
+        map.bindings.insert(Action::Fit, space);
+        map.fill_missing_defaults();
+        assert!(
+            map.get(Action::VideoPlayPause).is_none(),
+            "prefiere dejarla sin asignar antes que duplicar el atajo"
+        );
+    }
+
+    #[test]
     fn defaults_has_one_entry_per_action_with_shortcut() {
         let map = ShortcutMap::defaults();
-        assert_eq!(map.iter().count(), 14);
-        let no_shortcut = &[
-            Action::SetDefaultViewer,
-            Action::Edit,
-            Action::SaveCopy,
-            Action::SaveAs,
-            Action::CancelEdit,
-            Action::ResetEdit,
-            Action::ApplyCrop,
-            Action::SetLangEs,
-            Action::SetLangEn,
-        ];
+        assert_eq!(map.iter().count(), 20);
         for action in Action::all() {
-            if no_shortcut.contains(&action) {
+            if crate::core::actions::NO_SHORTCUT.contains(&action) {
                 assert!(
                     map.get(action).is_none(),
                     "{action:?} no debe tener binding default"

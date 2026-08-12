@@ -16,6 +16,14 @@ fn default_language() -> Language {
     Language::En
 }
 
+fn default_video_autoplay() -> bool {
+    true
+}
+
+fn default_video_volume_percent() -> u8 {
+    crate::core::video::volume::DEFAULT_VOLUME
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
@@ -28,6 +36,10 @@ pub struct Settings {
     pub slideshow_interval_secs: u64,
     #[serde(default = "default_language")]
     pub language: Language,
+    #[serde(default = "default_video_autoplay")]
+    pub video_autoplay: bool,
+    #[serde(default = "default_video_volume_percent")]
+    pub video_volume_percent: u8,
 }
 
 impl Default for Settings {
@@ -38,6 +50,8 @@ impl Default for Settings {
             shortcuts: ShortcutMap::defaults(),
             slideshow_interval_secs: 5,
             language: Language::En,
+            video_autoplay: default_video_autoplay(),
+            video_volume_percent: default_video_volume_percent(),
         }
     }
 }
@@ -45,9 +59,20 @@ impl Default for Settings {
 impl Settings {
     pub fn load(path: &Path) -> Result<Settings> {
         match fs::read_to_string(path) {
-            Ok(content) => toml::from_str(&content).map_err(|e| {
-                ShImagesError::Config(format!("invalid settings in {}: {e}", path.display()))
-            }),
+            Ok(content) => {
+                let mut settings: Settings = toml::from_str(&content).map_err(|e| {
+                    ShImagesError::Config(format!("invalid settings in {}: {e}", path.display()))
+                })?;
+                // Un settings.toml de una versión anterior no tiene los atajos
+                // de las acciones nuevas; sin esto se quedarían sin asignar.
+                let added = settings.shortcuts.fill_missing_defaults();
+                if added > 0 {
+                    tracing::info!(added, "atajos nuevos añadidos a la configuración existente");
+                }
+                settings.video_volume_percent =
+                    crate::core::video::volume::clamp_volume(settings.video_volume_percent);
+                Ok(settings)
+            }
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 let settings = Settings::default();
                 settings.save(path)?;
@@ -135,6 +160,7 @@ mod tests {
             shortcuts: ShortcutMap::defaults(),
             slideshow_interval_secs: 5,
             language: Language::En,
+            ..Settings::default()
         };
 
         settings.save(&path).unwrap();
@@ -166,6 +192,7 @@ mod tests {
             shortcuts: ShortcutMap::defaults(),
             slideshow_interval_secs: 5,
             language: Language::Es,
+            ..Settings::default()
         };
 
         second.save(&path).unwrap();
@@ -197,6 +224,7 @@ mod tests {
             shortcuts: ShortcutMap::defaults(),
             slideshow_interval_secs: 10,
             language: Language::Es,
+            ..Settings::default()
         };
         settings.save(&path).unwrap();
         let loaded = Settings::load(&path).unwrap();
@@ -219,6 +247,7 @@ mod tests {
             shortcuts: ShortcutMap::defaults(),
             slideshow_interval_secs: 5,
             language: Language::En,
+            ..Settings::default()
         };
         settings.save(&path).unwrap();
         let loaded = Settings::load(&path).unwrap();

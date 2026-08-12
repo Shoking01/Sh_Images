@@ -1,0 +1,759 @@
+//! Reproductor: une decodificador, audio y reloj en un hilo dedicado.
+//!
+//! El hilo de UI nunca toca Media Foundation ni COM (ver `mf`): sólo envía
+//! órdenes por un canal y lee frames ya decodificados de un buffer acotado.
+//!
+//! Contrapresión y consumo en reposo: el hilo se bloquea en `Condvar` cuando el
+//! buffer está lleno y en `recv()` cuando está en pausa, así que un video
+//! pausado consume 0 % de CPU sin lógica adicional.
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use super::audio::{buffer_capacity, ramp_coefficient, AudioBuffer};
+use super::backend::{self, Sample};
+use super::clock::{audio_position, PlayClock};
+use super::playback::{next_state, should_restart_from_zero, PlaybackEvent, PlaybackState};
+use super::ring::{FrameRing, VideoFrame};
+use super::timeline::{self, FrameDecision};
+use super::{seek, volume, VideoInfo};
+
+/// Órdenes del hilo de UI al decodificador.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PlayerCommand {
+    Play,
+    Pause,
+    SeekTo(Duration),
+    Shutdown,
+}
+
+/// Estado que el hilo decodificador publica para la UI.
+#[derive(Debug, Default)]
+struct Shared {
+    info: VideoInfo,
+    /// Posición del último salto, base del reloj de audio.
+    seek_base: Duration,
+    audio_sample_rate: u32,
+    reached_end: bool,
+    error: Option<String>,
+    ready: bool,
+}
+
+/// Instantánea para pintar los controles.
+#[derive(Debug, Clone)]
+pub struct PlayerSnapshot {
+    pub state: PlaybackState,
+    pub position: Duration,
+    pub info: VideoInfo,
+    pub volume: u8,
+    pub muted: bool,
+    pub error: Option<String>,
+}
+
+impl PlayerSnapshot {
+    pub fn duration(&self) -> Option<Duration> {
+        self.info.duration
+    }
+}
+
+/// Reproductor de un archivo de video.
+///
+/// Al soltarlo se para el hilo y se hace `join`: nunca quedan dos pistas de
+/// audio sonando ni hilos huérfanos con recursos COM.
+pub struct VideoPlayer {
+    path: PathBuf,
+    ring: Arc<FrameRing>,
+    audio: Arc<AudioBuffer>,
+    shared: Arc<Mutex<Shared>>,
+    cmd_tx: mpsc::Sender<PlayerCommand>,
+    shutdown: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+
+    // Estado que vive en el hilo de UI.
+    state: PlaybackState,
+    clock: PlayClock,
+    volume: u8,
+    muted: bool,
+    remembered_volume: u8,
+    consecutive_drops: u32,
+    /// Salto acumulado pendiente de enviar, para no encolar un `SetCurrentPosition`
+    /// por cada pulsación al mantener la tecla.
+    pending_seek: Option<Duration>,
+    last_seek_request: Option<Instant>,
+}
+
+/// Espera antes de materializar un salto, para agrupar pulsaciones seguidas.
+const SEEK_DEBOUNCE: Duration = Duration::from_millis(120);
+
+impl VideoPlayer {
+    /// Abre un video y arranca el hilo decodificador.
+    ///
+    /// La apertura real ocurre en el hilo: esta función no bloquea, y los
+    /// errores aparecen luego en `snapshot().error`.
+    pub fn open(path: &Path, viewport: (u32, u32), volume: u8, autoplay: bool) -> Self {
+        let ring = Arc::new(FrameRing::new());
+        let audio = Arc::new(AudioBuffer::new(buffer_capacity(48_000, 2)));
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+
+        let state = if autoplay {
+            PlaybackState::Playing
+        } else {
+            PlaybackState::Stopped
+        };
+
+        let thread = {
+            let path = path.to_path_buf();
+            let ring = Arc::clone(&ring);
+            let audio = Arc::clone(&audio);
+            let shared = Arc::clone(&shared);
+            let shutdown = Arc::clone(&shutdown);
+            std::thread::Builder::new()
+                .name("sh_images-video".to_string())
+                .spawn(move || {
+                    decoder_thread(
+                        path, viewport, autoplay, ring, audio, shared, shutdown, cmd_rx,
+                    );
+                })
+                .ok()
+        };
+
+        let mut player = Self {
+            path: path.to_path_buf(),
+            ring,
+            audio,
+            shared,
+            cmd_tx,
+            shutdown,
+            thread,
+            state,
+            clock: PlayClock::new(),
+            volume: volume::clamp_volume(volume),
+            muted: false,
+            remembered_volume: volume::clamp_volume(volume),
+            consecutive_drops: 0,
+            pending_seek: None,
+            last_seek_request: None,
+        };
+        player.apply_gain();
+        if autoplay {
+            player.clock.start(Instant::now());
+        }
+        player
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn shared(&self) -> std::sync::MutexGuard<'_, Shared> {
+        self.shared.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// `true` cuando el decodificador ya publicó los metadatos.
+    pub fn is_ready(&self) -> bool {
+        self.shared().ready
+    }
+
+    pub fn info(&self) -> VideoInfo {
+        self.shared().info
+    }
+
+    pub fn state(&self) -> PlaybackState {
+        self.state
+    }
+
+    /// Posición actual, derivada del audio cuando lo hay.
+    ///
+    /// El dispositivo de audio no corre exactamente a su frecuencia nominal:
+    /// derivar el video de `Instant` acumularía desincronía labial.
+    pub fn position(&self, now: Instant) -> Duration {
+        let s = self.shared();
+        if s.info.has_audio && s.audio_sample_rate > 0 {
+            audio_position(
+                s.seek_base,
+                self.audio.frames_played(),
+                s.audio_sample_rate,
+                Duration::ZERO,
+            )
+        } else {
+            self.clock.now(now)
+        }
+    }
+
+    pub fn snapshot(&self, now: Instant) -> PlayerSnapshot {
+        let position = self.position(now);
+        let s = self.shared();
+        PlayerSnapshot {
+            state: self.state,
+            position: match s.info.duration {
+                Some(total) => position.min(total),
+                None => position,
+            },
+            info: s.info,
+            volume: self.volume,
+            muted: self.muted,
+            error: s.error.clone(),
+        }
+    }
+
+    fn send(&self, cmd: PlayerCommand) {
+        if self.cmd_tx.send(cmd).is_err() {
+            tracing::debug!("el hilo de video ya terminó; orden descartada");
+        }
+    }
+
+    /// Aplica un evento de la máquina de estados.
+    pub fn dispatch(&mut self, event: PlaybackEvent, now: Instant) {
+        let restart = should_restart_from_zero(self.state, event);
+        let next = next_state(self.state, event);
+        if restart {
+            self.seek_to(Duration::ZERO, now);
+        }
+        if next == self.state {
+            return;
+        }
+        self.state = next;
+        match next {
+            PlaybackState::Playing => {
+                self.clock.start(now);
+                self.send(PlayerCommand::Play);
+            }
+            PlaybackState::Paused | PlaybackState::Ended => {
+                self.clock.pause(now);
+                self.send(PlayerCommand::Pause);
+            }
+            PlaybackState::Stopped => {
+                self.clock.pause(now);
+                self.send(PlayerCommand::Pause);
+            }
+        }
+    }
+
+    pub fn toggle_play_pause(&mut self, now: Instant) {
+        self.dispatch(PlaybackEvent::TogglePlayPause, now);
+    }
+
+    /// Salto relativo, agrupando pulsaciones seguidas.
+    pub fn seek_relative(&mut self, delta_secs: i64, now: Instant) {
+        let base = self.pending_seek.unwrap_or_else(|| self.position(now));
+        let duration = self.info().duration;
+        let target = seek::seek_relative(base, delta_secs, duration);
+        self.pending_seek = Some(target);
+        self.last_seek_request = Some(now);
+        // El contador de la UI salta ya; el decodificador va detrás.
+        self.clock.seek_to(target, now);
+        if seek::seek_reaches_end(target, duration) {
+            self.dispatch(PlaybackEvent::ReachedEnd, now);
+        }
+    }
+
+    pub fn seek_forward(&mut self, now: Instant) {
+        self.seek_relative(seek::SEEK_STEP.as_secs() as i64, now);
+    }
+
+    pub fn seek_backward(&mut self, now: Instant) {
+        self.seek_relative(-(seek::SEEK_STEP.as_secs() as i64), now);
+    }
+
+    /// Salto absoluto, para la barra de progreso.
+    pub fn seek_to(&mut self, target: Duration, now: Instant) {
+        let target = seek::seek_absolute(target, self.info().duration);
+        self.pending_seek = Some(target);
+        self.last_seek_request = Some(now);
+        self.clock.seek_to(target, now);
+    }
+
+    /// Envía el salto pendiente cuando pasó el tiempo de agrupación.
+    fn flush_pending_seek(&mut self, now: Instant) {
+        let (Some(target), Some(requested)) = (self.pending_seek, self.last_seek_request) else {
+            return;
+        };
+        if now.saturating_duration_since(requested) < SEEK_DEBOUNCE {
+            return;
+        }
+        self.pending_seek = None;
+        self.last_seek_request = None;
+        self.ring.bump_epoch();
+        self.audio.flush();
+        {
+            let mut s = self.shared();
+            s.seek_base = target;
+            s.reached_end = false;
+        }
+        self.send(PlayerCommand::SeekTo(target));
+        self.dispatch(PlaybackEvent::Seek, now);
+    }
+
+    pub fn volume(&self) -> u8 {
+        self.volume
+    }
+
+    pub fn is_muted(&self) -> bool {
+        self.muted
+    }
+
+    pub fn volume_up(&mut self) {
+        let (v, muted) =
+            volume::volume_up_unmuting(self.volume, self.muted, self.remembered_volume);
+        self.volume = v;
+        self.muted = muted;
+        self.apply_gain();
+    }
+
+    pub fn volume_down(&mut self) {
+        self.volume = volume::volume_down(self.volume);
+        self.apply_gain();
+    }
+
+    pub fn set_volume(&mut self, v: u8) {
+        self.volume = volume::clamp_volume(v);
+        self.apply_gain();
+    }
+
+    pub fn toggle_mute(&mut self) {
+        let (muted, v) = volume::toggle_mute(self.muted, self.volume, self.remembered_volume);
+        if muted {
+            self.remembered_volume = v;
+        } else {
+            self.volume = v;
+        }
+        self.muted = muted;
+        self.apply_gain();
+    }
+
+    fn apply_gain(&self) {
+        self.audio
+            .set_target_gain(volume::effective_gain(self.volume, self.muted));
+    }
+
+    /// Avanza un frame si toca. Devuelve el que hay que subir a la textura.
+    ///
+    /// El descarte de frames atrasados ocurre aquí, antes de tocar la GPU.
+    pub fn tick(&mut self, now: Instant) -> Option<VideoFrame> {
+        self.flush_pending_seek(now);
+
+        if self.shared().reached_end && self.state == PlaybackState::Playing {
+            self.dispatch(PlaybackEvent::ReachedEnd, now);
+        }
+
+        let clock = self.position(now);
+        let mut presentable = None;
+        while let Some(pts) = self.ring.peek_pts() {
+            let decision = timeline::frame_decision(pts, clock, timeline::LATE_THRESHOLD);
+            self.consecutive_drops =
+                timeline::update_drop_counter(self.consecutive_drops, decision);
+            match decision {
+                FrameDecision::Wait(_) => break,
+                FrameDecision::Present => {
+                    presentable = self.ring.try_pop();
+                    break;
+                }
+                FrameDecision::Drop => {
+                    // Nunca dejar el buffer vacío: sin frame nuevo la pantalla
+                    // se quedaría en negro.
+                    if self.ring.len() <= 1 {
+                        presentable = self.ring.try_pop();
+                        break;
+                    }
+                    if let Some(stale) = self.ring.try_pop() {
+                        self.recycle(stale);
+                    }
+                }
+            }
+        }
+        presentable
+    }
+
+    /// Devuelve la asignación de un frame ya subido, para que el decodificador
+    /// la reutilice en vez de pedir 8 MB nuevos treinta veces por segundo.
+    pub fn recycle(&self, frame: VideoFrame) {
+        let expected = frame.pixels.len();
+        self.ring.recycle(frame.pixels, expected);
+    }
+
+    /// Cuánto esperar antes del próximo repintado. `None` si no hay que
+    /// repintar (en pausa: cero repintados, cero CPU).
+    pub fn repaint_after(&self, now: Instant) -> Option<Duration> {
+        if self.state != PlaybackState::Playing {
+            return None;
+        }
+        let clock = self.position(now);
+        Some(timeline::time_to_next_frame(
+            self.ring.peek_pts(),
+            clock,
+            self.info().fps,
+        ))
+    }
+}
+
+impl Drop for VideoPlayer {
+    fn drop(&mut self) {
+        // Parar antes de soltar: si no, dos videos seguidos solaparían audio y
+        // quedarían hilos con recursos COM vivos.
+        self.shutdown.store(true, Ordering::Release);
+        let _ = self.cmd_tx.send(PlayerCommand::Shutdown);
+        self.ring.close();
+        if let Some(handle) = self.thread.take() {
+            if handle.join().is_err() {
+                tracing::warn!("el hilo de video terminó en pánico");
+            }
+        }
+    }
+}
+
+/// Toma el mutex de estado compartido tolerando envenenamiento, igual que el
+/// resto del proyecto.
+fn lock(s: &Arc<Mutex<Shared>>) -> std::sync::MutexGuard<'_, Shared> {
+    s.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Cuerpo del hilo decodificador. Todo COM vive y muere aquí.
+#[allow(clippy::too_many_arguments)]
+fn decoder_thread(
+    path: PathBuf,
+    viewport: (u32, u32),
+    autoplay: bool,
+    ring: Arc<FrameRing>,
+    audio: Arc<AudioBuffer>,
+    shared: Arc<Mutex<Shared>>,
+    shutdown: Arc<AtomicBool>,
+    cmd_rx: mpsc::Receiver<PlayerCommand>,
+) {
+    // La frecuencia del dispositivo se consulta en un hilo aparte, y no aquí.
+    //
+    // El backend WASAPI de cpal llama a `CoInitializeEx` en modo STA sobre el
+    // hilo que lo usa; hacerlo antes que `MFStartup` dejaba este hilo en el
+    // apartamento equivocado y Media Foundation quiere MTA (se veía como
+    // `RPC_E_CHANGED_MODE` en cada apertura). El stream de audio sí se crea
+    // aquí después, ya con MF arrancado: para entonces COM está en MTA y cpal
+    // se adapta.
+    let audio_rate = std::thread::spawn(audio_sample_rate_probe)
+        .join()
+        .unwrap_or(0);
+
+    let mut decoder = match backend::open(&path, viewport, audio_rate) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "no se pudo abrir el video");
+            let mut s = lock(&shared);
+            s.error = Some(e.to_string());
+            s.ready = true;
+            return;
+        }
+    };
+
+    let info = decoder.info();
+    {
+        let mut s = lock(&shared);
+        s.info = info;
+        s.audio_sample_rate = audio_rate;
+        s.ready = true;
+    }
+
+    // El stream de cpal vive en este hilo: `cpal::Stream` no es `Send`.
+    let _stream = if info.has_audio {
+        audio_device().and_then(|d| start_audio_stream(d, Arc::clone(&audio)))
+    } else {
+        None
+    };
+
+    let mut playing = autoplay;
+    loop {
+        if shutdown.load(Ordering::Acquire) {
+            break;
+        }
+        // Drenar órdenes sin bloquear.
+        let mut disconnected = false;
+        loop {
+            match cmd_rx.try_recv() {
+                Ok(PlayerCommand::Play) => playing = true,
+                Ok(PlayerCommand::Pause) => playing = false,
+                Ok(PlayerCommand::SeekTo(target)) => {
+                    if let Err(e) = decoder.seek(target) {
+                        tracing::debug!(error = %e, "el salto falló");
+                    }
+                    lock(&shared).reached_end = false;
+                }
+                Ok(PlayerCommand::Shutdown) => return,
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+        if disconnected {
+            break;
+        }
+
+        // En pausa, con al menos un frame listo, dormir hasta la próxima orden:
+        // es lo que da 0 % de CPU con el video parado.
+        if !playing && !ring.is_empty() {
+            match cmd_rx.recv() {
+                Ok(PlayerCommand::Play) => playing = true,
+                Ok(PlayerCommand::Pause) => {}
+                Ok(PlayerCommand::SeekTo(target)) => {
+                    if let Err(e) = decoder.seek(target) {
+                        tracing::debug!(error = %e, "el salto falló");
+                    }
+                    lock(&shared).reached_end = false;
+                }
+                Ok(PlayerCommand::Shutdown) | Err(_) => break,
+            }
+            continue;
+        }
+
+        if lock(&shared).reached_end {
+            // Terminado: esperar a un salto o a que se reanude.
+            match cmd_rx.recv() {
+                Ok(PlayerCommand::SeekTo(target)) => {
+                    if let Err(e) = decoder.seek(target) {
+                        tracing::debug!(error = %e, "el salto falló");
+                    }
+                    lock(&shared).reached_end = false;
+                }
+                Ok(PlayerCommand::Play) => playing = true,
+                Ok(PlayerCommand::Pause) => playing = false,
+                Ok(PlayerCommand::Shutdown) | Err(_) => break,
+            }
+            continue;
+        }
+
+        // Contrapresión: si no hay hueco, esperar un poco en vez de girar.
+        if ring.is_full() || (info.has_audio && audio.is_full()) {
+            match cmd_rx.recv_timeout(Duration::from_millis(4)) {
+                Ok(PlayerCommand::Shutdown) => break,
+                Ok(PlayerCommand::Play) => playing = true,
+                Ok(PlayerCommand::Pause) => playing = false,
+                Ok(PlayerCommand::SeekTo(target)) => {
+                    if let Err(e) = decoder.seek(target) {
+                        tracing::debug!(error = %e, "el salto falló");
+                    }
+                    lock(&shared).reached_end = false;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            continue;
+        }
+
+        let epoch = ring.epoch();
+        match decoder.next_sample() {
+            Ok(Sample::Video(frame)) => {
+                if !ring.push(epoch, frame) && ring.is_closed() {
+                    break;
+                }
+            }
+            Ok(Sample::Audio { samples, .. }) => {
+                if !samples.is_empty() {
+                    audio.push(&samples);
+                }
+            }
+            Ok(Sample::EndOfStream) => {
+                lock(&shared).reached_end = true;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "fallo al decodificar; se detiene el video");
+                lock(&shared).error = Some(e.to_string());
+                break;
+            }
+        }
+    }
+
+    // El decodificador (y con él el IMFSourceReader) se suelta aquí, antes de
+    // que MfSession haga MFShutdown en su Drop.
+    drop(decoder);
+}
+
+/// Dispositivo de salida elegido.
+struct AudioDevice {
+    #[cfg(windows)]
+    device: cpal::Device,
+    #[cfg(windows)]
+    config: cpal::StreamConfig,
+    sample_rate: u32,
+    channels: usize,
+}
+
+/// Consulta la frecuencia del dispositivo de salida.
+///
+/// Pensada para ejecutarse en un hilo de usar y tirar: cpal inicializa COM en
+/// STA sobre el hilo que lo llama, y el hilo decodificador tiene que quedarse
+/// en MTA para Media Foundation.
+fn audio_sample_rate_probe() -> u32 {
+    audio_device().map(|d| d.sample_rate).unwrap_or(0)
+}
+
+#[cfg(windows)]
+fn audio_device() -> Option<AudioDevice> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    let host = cpal::default_host();
+    let device = host.default_output_device()?;
+    let supported = device.default_output_config().ok()?;
+    if supported.sample_format() != cpal::SampleFormat::F32 {
+        // Sólo f32: convertir formatos exóticos añadiría código por un caso
+        // que WASAPI no produce en la práctica.
+        tracing::debug!(format = ?supported.sample_format(), "formato de audio no soportado");
+        return None;
+    }
+    let sample_rate = supported.sample_rate().0;
+    let channels = supported.channels() as usize;
+    Some(AudioDevice {
+        config: supported.into(),
+        device,
+        sample_rate,
+        channels,
+    })
+}
+
+#[cfg(not(windows))]
+fn audio_device() -> Option<AudioDevice> {
+    None
+}
+
+#[cfg(windows)]
+fn start_audio_stream(dev: AudioDevice, audio: Arc<AudioBuffer>) -> Option<cpal::Stream> {
+    use cpal::traits::{DeviceTrait, StreamTrait};
+    let k = ramp_coefficient(dev.sample_rate);
+    let channels = dev.channels;
+    let mut gain = 0.0f32;
+    let stream = dev
+        .device
+        .build_output_stream(
+            &dev.config,
+            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                gain = audio.fill(data, gain, k, channels);
+            },
+            |err| tracing::warn!(error = %err, "error en el stream de audio"),
+            None,
+        )
+        .ok()?;
+    if let Err(e) = stream.play() {
+        tracing::warn!(error = %e, "no se pudo arrancar el audio");
+        return None;
+    }
+    Some(stream)
+}
+
+#[cfg(not(windows))]
+fn start_audio_stream(_dev: AudioDevice, _audio: Arc<AudioBuffer>) -> Option<()> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn player_for(path: &str) -> VideoPlayer {
+        VideoPlayer::open(Path::new(path), (1920, 1080), 80, false)
+    }
+
+    #[test]
+    fn opening_a_missing_file_reports_an_error_without_panicking() {
+        let p = player_for("no_existe_98765.mp4");
+        // El hilo publica el error; se espera un poco a que arranque.
+        for _ in 0..100 {
+            if p.is_ready() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let snap = p.snapshot(Instant::now());
+        assert!(
+            snap.error.is_some(),
+            "debería reportar un error de apertura"
+        );
+    }
+
+    #[test]
+    fn dropping_the_player_joins_its_thread() {
+        // Es lo que evita audio solapado al cambiar de video y procesos zombie
+        // al cerrar la app.
+        let p = player_for("no_existe_98765.mp4");
+        drop(p);
+    }
+
+    #[test]
+    fn volume_controls_clamp_and_remember() {
+        let mut p = player_for("no_existe_98765.mp4");
+        assert_eq!(p.volume(), 80);
+        p.volume_up();
+        assert_eq!(p.volume(), 85);
+        p.volume_down();
+        assert_eq!(p.volume(), 80);
+        for _ in 0..30 {
+            p.volume_down();
+        }
+        assert_eq!(p.volume(), 0);
+        for _ in 0..30 {
+            p.volume_up();
+        }
+        assert_eq!(p.volume(), 100);
+    }
+
+    #[test]
+    fn mute_roundtrips_the_volume() {
+        let mut p = player_for("no_existe_98765.mp4");
+        p.set_volume(60);
+        p.toggle_mute();
+        assert!(p.is_muted());
+        p.toggle_mute();
+        assert!(!p.is_muted());
+        assert_eq!(p.volume(), 60);
+    }
+
+    #[test]
+    fn volume_up_while_muted_unmutes() {
+        let mut p = player_for("no_existe_98765.mp4");
+        p.set_volume(50);
+        p.toggle_mute();
+        p.volume_up();
+        assert!(!p.is_muted(), "subir el volumen debe quitar el silencio");
+    }
+
+    #[test]
+    fn paused_player_requests_no_repaint() {
+        // La condición de 0 % de CPU en pausa.
+        let p = player_for("no_existe_98765.mp4");
+        assert_eq!(p.state(), PlaybackState::Stopped);
+        assert_eq!(p.repaint_after(Instant::now()), None);
+    }
+
+    #[test]
+    fn toggle_play_pause_moves_the_state() {
+        let mut p = player_for("no_existe_98765.mp4");
+        let now = Instant::now();
+        p.toggle_play_pause(now);
+        assert_eq!(p.state(), PlaybackState::Playing);
+        p.toggle_play_pause(now);
+        assert_eq!(p.state(), PlaybackState::Paused);
+    }
+
+    #[test]
+    fn seek_backward_at_zero_stays_at_zero() {
+        let mut p = player_for("no_existe_98765.mp4");
+        let now = Instant::now();
+        p.seek_backward(now);
+        assert_eq!(p.pending_seek, Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn repeated_seeks_coalesce_into_one_target() {
+        // Mantener pulsada la tecla no debe encolar un salto por pulsación.
+        let mut p = player_for("no_existe_98765.mp4");
+        let now = Instant::now();
+        for _ in 0..5 {
+            p.seek_forward(now);
+        }
+        assert_eq!(
+            p.pending_seek,
+            Some(Duration::from_secs(25)),
+            "cinco saltos de 5 s deben acumularse en uno de 25 s"
+        );
+    }
+}

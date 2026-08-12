@@ -19,8 +19,9 @@ use sh_images::core::slideshow;
 use sh_images::core::view::{Vec2, ViewTransform};
 
 use common::{
-    copy_fixture, corrupt_png_path, empty_png_path, gif_path, make_animated_gif,
-    make_folder_with_images, make_folder_with_rect_images,
+    copy_fixture, corrupt_png_path, corrupt_video_path, empty_png_path, empty_video_path, gif_path,
+    make_animated_gif, make_folder_with_images, make_folder_with_mixed_media,
+    make_folder_with_rect_images, png_renamed_as_mp4,
 };
 
 /// Flujo 1 — Apertura: abrir → decodificar → cachear.
@@ -190,6 +191,7 @@ fn flujo_configuracion_persistencia() {
         shortcuts: ShortcutMap::defaults(),
         slideshow_interval_secs: 5,
         language: sh_images::core::lang::Language::Es,
+        ..Settings::default()
     };
     modified.save(&path).expect("guardar modificado");
 
@@ -312,4 +314,290 @@ fn flujo_slideshow_interval() {
         Duration::from_secs(4),
         Duration::from_secs(5)
     ));
+}
+
+/// Flujo 10 — Reproducción de video: máquina de estados completa.
+///
+/// Equivale a "abrir video con autoplay → pausar → reanudar → llega al final →
+/// pulsar play reinicia desde cero".
+#[test]
+fn flujo_video_reproduccion_basica() {
+    use sh_images::core::video::playback::{
+        next_state, should_restart_from_zero, PlaybackEvent, PlaybackState,
+    };
+
+    let s = next_state(
+        PlaybackState::Stopped,
+        PlaybackEvent::Loaded { autoplay: true },
+    );
+    assert_eq!(s, PlaybackState::Playing, "con autoplay debe arrancar solo");
+
+    let s = next_state(s, PlaybackEvent::Pause);
+    assert_eq!(s, PlaybackState::Paused, "pausar detiene la reproducción");
+
+    let s = next_state(s, PlaybackEvent::Play);
+    assert_eq!(s, PlaybackState::Playing, "reanudar vuelve a reproducir");
+
+    let s = next_state(s, PlaybackEvent::ReachedEnd);
+    assert_eq!(s, PlaybackState::Ended, "al terminar pasa a Ended");
+    assert_eq!(
+        next_state(s, PlaybackEvent::ReachedEnd),
+        PlaybackState::Ended,
+        "recibir el final dos veces es idempotente"
+    );
+
+    assert!(
+        should_restart_from_zero(s, PlaybackEvent::Play),
+        "pulsar play al final debe reiniciar desde cero"
+    );
+    assert_eq!(next_state(s, PlaybackEvent::Play), PlaybackState::Playing);
+
+    assert_eq!(
+        next_state(
+            PlaybackState::Stopped,
+            PlaybackEvent::Loaded { autoplay: false }
+        ),
+        PlaybackState::Stopped,
+        "sin autoplay no debe sonar nada"
+    );
+}
+
+/// Flujo 11 — Avanzar y retroceder 5 segundos, con sus topes.
+///
+/// Equivale a "pulsar Ctrl+→ / Ctrl+← durante la reproducción".
+#[test]
+fn flujo_video_seek_cinco_segundos() {
+    use sh_images::core::video::seek::{seek_backward, seek_forward, seek_reaches_end, SEEK_STEP};
+
+    let total = Some(Duration::from_secs(60));
+    assert_eq!(SEEK_STEP, Duration::from_secs(5));
+
+    let pos = seek_forward(Duration::from_secs(10), total);
+    assert_eq!(pos, Duration::from_secs(15), "+5 s avanza cinco segundos");
+    assert_eq!(
+        seek_backward(pos),
+        Duration::from_secs(10),
+        "-5 s vuelve al punto de partida"
+    );
+
+    // Tope inferior: nunca negativo (Duration - Duration haría panic).
+    assert_eq!(
+        seek_backward(Duration::from_secs(2)),
+        Duration::ZERO,
+        "retroceder en el segundo 2 lleva a 00:00, no a negativo"
+    );
+    assert_eq!(seek_backward(Duration::ZERO), Duration::ZERO);
+
+    // Tope superior: aterriza exactamente en la duración y marca el final.
+    let fin = seek_forward(Duration::from_millis(59_500), total);
+    assert_eq!(fin, Duration::from_secs(60), "no se pasa de la duración");
+    assert!(
+        seek_reaches_end(fin, total),
+        "llegar al tope debe disparar el final"
+    );
+    assert_eq!(seek_forward(fin, total), fin, "en el final es idempotente");
+
+    // Duración desconocida: avanza sin límite y nunca declara el final.
+    let libre = seek_forward(Duration::from_secs(1_000), None);
+    assert_eq!(libre, Duration::from_secs(1_005));
+    assert!(!seek_reaches_end(libre, None));
+}
+
+/// Flujo 12 — Volumen, silencio y su persistencia en disco.
+///
+/// Equivale a "subir/bajar volumen, silenciar, cerrar y reabrir la app".
+#[test]
+fn flujo_video_volumen_y_mute() {
+    use sh_images::core::video::volume::{
+        clamp_volume, effective_gain, toggle_mute, volume_down, volume_up, DEFAULT_VOLUME,
+    };
+
+    let mut v = DEFAULT_VOLUME;
+    v = volume_up(v);
+    assert_eq!(v, 85, "subir aplica un paso de 5");
+    v = volume_down(v);
+    assert_eq!(v, DEFAULT_VOLUME, "bajar lo deshace exactamente");
+
+    // Topes exactos: es la razón de guardar u8 y no f32.
+    for _ in 0..30 {
+        v = volume_up(v);
+    }
+    assert_eq!(v, 100, "el volumen se detiene en 100");
+    for _ in 0..30 {
+        v = volume_down(v);
+    }
+    assert_eq!(v, 0, "y en 0, sin deriva acumulada");
+
+    // Silenciar recuerda el volumen previo.
+    let (muted, recordado) = toggle_mute(false, 60, 0);
+    assert!(muted);
+    assert_eq!(effective_gain(60, muted), 0.0, "silenciado no suena");
+    let (muted, restaurado) = toggle_mute(muted, 60, recordado);
+    assert!(!muted);
+    assert_eq!(restaurado, 60, "al desilenciar vuelve el volumen anterior");
+
+    assert!(
+        effective_gain(50, false) < 0.5,
+        "a media escala la ganancia debe estar por debajo de la lineal"
+    );
+
+    // Persistencia: guardar y recargar mantiene el valor.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("settings.toml");
+    let settings = Settings {
+        video_volume_percent: 35,
+        video_autoplay: false,
+        ..Settings::default()
+    };
+    settings.save(&path).expect("guardar ajustes");
+    let recargado = Settings::load(&path).expect("recargar ajustes");
+    assert_eq!(recargado.video_volume_percent, 35);
+    assert!(!recargado.video_autoplay);
+    assert_eq!(clamp_volume(250), 100, "un TOML editado a mano se sanea");
+}
+
+/// Flujo 13 — Autoplay y su convivencia con el pase de diapositivas.
+///
+/// Equivale a "activar el pase en una carpeta con imágenes y videos".
+#[test]
+fn flujo_video_autoplay_y_slideshow() {
+    use sh_images::core::video::autoplay::{
+        autoplay_on_navigate, autoplay_on_open, slideshow_should_advance, AutoplayDecision,
+    };
+    use sh_images::core::video::playback::PlaybackState;
+
+    let intervalo = Duration::from_secs(5);
+
+    assert_eq!(
+        autoplay_on_open(true, true, false),
+        AutoplayDecision::Play,
+        "con el ajuste activado arranca solo"
+    );
+    assert_eq!(
+        autoplay_on_open(false, true, false),
+        AutoplayDecision::StayPaused,
+        "con el ajuste desactivado muestra el primer frame quieto"
+    );
+    assert_eq!(
+        autoplay_on_navigate(false, true, false),
+        AutoplayDecision::Play,
+        "si venía reproduciendo, el siguiente video sigue reproduciendo"
+    );
+
+    // Un video en reproducción retiene el pase aunque venza el intervalo.
+    assert!(
+        !slideshow_should_advance(
+            Some((PlaybackState::Playing, Duration::from_secs(180))),
+            Duration::from_secs(60),
+            intervalo,
+            true
+        ),
+        "el pase no debe saltarse un video de 3 minutos a los 5 segundos"
+    );
+    assert!(
+        slideshow_should_advance(
+            Some((PlaybackState::Ended, Duration::ZERO)),
+            Duration::ZERO,
+            intervalo,
+            true
+        ),
+        "al terminar el video, el pase avanza de inmediato"
+    );
+    assert!(
+        slideshow_should_advance(
+            Some((PlaybackState::Paused, Duration::from_secs(90))),
+            intervalo,
+            intervalo,
+            true
+        ),
+        "un video pausado no puede bloquear el pase para siempre"
+    );
+
+    // No-regresión del flujo 9: con sólo imágenes, el intervalo manda.
+    assert!(slideshow_should_advance(None, intervalo, intervalo, true));
+    assert!(!slideshow_should_advance(
+        None,
+        Duration::from_secs(4),
+        intervalo,
+        true
+    ));
+}
+
+/// Flujo 14 — Videos corruptos, vacíos o disfrazados no tumban la app.
+///
+/// Equivale a "abrir un archivo dañado o de un códec no soportado".
+#[test]
+fn flujo_video_corrupto_no_crash() {
+    use sh_images::core::media::{is_video, media_kind, MediaKind};
+    use sh_images::utils::errors::ShImagesError;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let vacio = empty_video_path(dir.path());
+    let corrupto = corrupt_video_path(dir.path());
+    let disfrazado = png_renamed_as_mp4(dir.path());
+
+    // La clasificación es por extensión: validar el contenido es del backend.
+    for path in [&vacio, &corrupto, &disfrazado] {
+        assert_eq!(media_kind(path), Some(MediaKind::Video));
+        assert!(is_video(path));
+    }
+
+    // Abrirlos debe devolver error, nunca entrar en pánico.
+    for path in [&vacio, &corrupto, &disfrazado] {
+        let result = sh_images::core::video::backend::open(path, (1920, 1080), 48_000);
+        let err = result
+            .err()
+            .unwrap_or_else(|| panic!("{} debería fallar al abrirse", path.display()));
+        assert!(
+            matches!(err, ShImagesError::Media(_)),
+            "el error debe ser de medios, fue {err:?}"
+        );
+    }
+
+    // Y `load_image` tampoco debe entrar en pánico si alguien lo intenta.
+    assert!(load_image(&corrupto).is_err());
+}
+
+/// Flujo 15 — Navegar una carpeta con imágenes y videos mezclados.
+///
+/// Equivale a "abrir una carpeta mixta y recorrerla con las flechas".
+#[test]
+fn flujo_navegacion_carpeta_mixta() {
+    use sh_images::core::media::{is_image, media_kind};
+
+    let (dir, esperadas) = make_folder_with_mixed_media(2, 2);
+    let nav =
+        Navigation::from_folder(&esperadas[0], SUPPORTED_EXTENSIONS).expect("listar carpeta mixta");
+
+    assert_eq!(
+        nav.images.len(),
+        4,
+        "deben listarse las 2 imágenes y los 2 videos, y no el .txt"
+    );
+    assert_eq!(nav.images, esperadas, "orden alfabético estable");
+    assert!(
+        !nav.images
+            .iter()
+            .any(|p| p.extension().is_some_and(|e| e == "txt")),
+        "el .txt no es un medio soportado"
+    );
+
+    let videos = nav.images.iter().filter(|p| !is_image(p)).count();
+    assert_eq!(videos, 2, "dos de los cuatro son video");
+    for p in &nav.images {
+        assert!(media_kind(p).is_some(), "{} sin clasificar", p.display());
+    }
+
+    // La cola de miniaturas sólo debe recibir imágenes: los workers llaman a
+    // `load_image`, que no sabe abrir video.
+    let encolables = nav.images.iter().filter(|p| is_image(p)).count();
+    assert_eq!(encolables, 2, "sólo las imágenes van a miniaturas");
+
+    // Recorrido circular sobre los cuatro elementos.
+    let mut nav = nav;
+    for _ in 0..4 {
+        nav.next();
+    }
+    assert_eq!(nav.current, 0, "cuatro avances vuelven al principio");
+    drop(dir);
 }

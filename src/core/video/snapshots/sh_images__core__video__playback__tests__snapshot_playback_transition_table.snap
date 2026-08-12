@@ -1,0 +1,32 @@
+---
+source: src/core/video/playback.rs
+expression: out
+---
+Stopped + Play -> Playing
+Stopped + Pause -> Stopped
+Stopped + TogglePlayPause -> Playing
+Stopped + Stop -> Stopped
+Stopped + Seek -> Stopped
+Stopped + ReachedEnd -> Stopped
+Stopped + Loaded { autoplay: true } -> Playing
+Playing + Play -> Playing
+Playing + Pause -> Paused
+Playing + TogglePlayPause -> Paused
+Playing + Stop -> Stopped
+Playing + Seek -> Playing
+Playing + ReachedEnd -> Ended
+Playing + Loaded { autoplay: true } -> Playing
+Paused + Play -> Playing
+Paused + Pause -> Paused
+Paused + TogglePlayPause -> Playing
+Paused + Stop -> Stopped
+Paused + Seek -> Paused
+Paused + ReachedEnd -> Paused
+Paused + Loaded { autoplay: true } -> Playing
+Ended + Play -> Playing (pos=0)
+Ended + Pause -> Ended
+Ended + TogglePlayPause -> Playing (pos=0)
+Ended + Stop -> Stopped
+Ended + Seek -> Paused
+Ended + ReachedEnd -> Ended
+Ended + Loaded { autoplay: true } -> Playing
