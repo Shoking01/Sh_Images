@@ -46,7 +46,12 @@ acotado (3 trabajadores) con caché LRU independiente para miniaturas decodifica
 - **Navegación** — flechas entre imágenes de la carpeta, sidebar con miniaturas y scroll
 - **Metadatos EXIF** — modelo de cámara, ISO, apertura, longitud focal, fecha, dimensiones
 - **GIF animado** — reproducción en bucle con temporización de frames
-- **Slideshow** — avance automático (intervalo configurable 1–60 s)
+- **Reproducción de video** (Windows) — MP4/M4V/MOV con audio, play/pausa,
+  avance y retroceso de 5 s, volumen, silencio y reproducción automática. Usa el
+  decodificador del sistema (Media Foundation): sin códecs empaquetados, ~205 KB
+  de binario
+- **Slideshow** — avance automático (intervalo configurable 1–60 s); espera a
+  que termine el video en reproducción
 - **Pantalla completa** — F11, ventana sin bordes
 - **Tema oscuro/claro** — persistente entre sesiones
 - **Atajos configurables** — edición de keybindings vía diálogo en la app
@@ -63,6 +68,14 @@ acotado (3 trabajadores) con caché LRU independiente para miniaturas decodifica
 | WebP | Lossy + lossless | ✅ Soportado |
 | TIFF | Multi-página | ✅ Soportado |
 | AVIF | Basado en AV1 | ✅ Soportado |
+| MP4 / M4V / MOV | H.264, HEVC, AAC | ✅ Sólo Windows |
+
+La decodificación de video usa Windows Media Foundation, así que los códecs
+disponibles son los del sistema: HEVC, por ejemplo, requiere una extensión de la
+Microsoft Store. Los archivos no soportados muestran un error en vez de fallar
+en silencio. En Linux y macOS la app compila y funciona, pero los videos avisan
+de que no están soportados. MKV y WebM quedan fuera a propósito: dependen de
+extensiones de la Store que pueden no estar instaladas.
 
 ### Instalación
 
@@ -102,6 +115,8 @@ cache_memory_limit_mb = 512
 theme = "dark"
 slideshow_interval_secs = 5
 language = "en"
+video_autoplay = true
+video_volume_percent = 80
 ```
 
 La primera ejecución crea valores por defecto. Escritura atómica (temp + rename) previene

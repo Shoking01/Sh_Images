@@ -1,5 +1,6 @@
 ---
 source: src/core/shortcuts.rs
+assertion_line: 367
 expression: "strings.join(\"\\n\")"
 ---
 Abrir -> Ctrl+O
@@ -16,3 +17,9 @@ Slideshow -> F5
 Slideshow más rápido -> ,
 Slideshow más lento -> .
 Configurar atajos -> Ctrl+K
+Reproducir / Pausar -> Espacio
+Avanzar 5 s -> Ctrl+→
+Retroceder 5 s -> Ctrl+←
+Subir volumen -> Ctrl+↑
+Bajar volumen -> Ctrl+↓
+Silenciar -> M

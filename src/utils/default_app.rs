@@ -137,6 +137,18 @@ mod tests {
         assert!(ASSOCIATED_EXTENSIONS.contains(&".webp"));
     }
 
+    #[test]
+    fn associated_extensions_excludes_video() {
+        // Decisión de producto: "establecer como visor por defecto" no secuestra
+        // las asociaciones de video, aunque la app sepa reproducirlo.
+        for ext in [".mp4", ".m4v", ".mov"] {
+            assert!(
+                !ASSOCIATED_EXTENSIONS.contains(&ext),
+                "{ext} no debe asociarse desde el diálogo de visor por defecto"
+            );
+        }
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn prog_id_is_valid() {

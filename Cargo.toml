@@ -42,6 +42,10 @@ harness = false
 name = "preload"
 harness = false
 
+[[bench]]
+name = "video_timeline"
+harness = false
+
 [dependencies]
 # GUI — eframe/egui: framework immediate-mode nativo, fijado por Plan.md.
 # NOTA: el backend por defecto (wgpu) produce un binario >20MB. Ver ADR-001.
@@ -81,6 +85,30 @@ ico = "0.5"
 # Windows only: embed icon into .exe (needs rc.exe on MSVC toolchain).
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
-# Windows only: registry access for file associations (default viewer).
+# Windows only: registry access for file associations (default viewer),
+# Media Foundation para decodificación de video y cpal para la salida de audio.
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+# Media Foundation — justificación (AGENTS.md §7.2): licencia MIT OR Apache-2.0,
+# mantenido por Microsoft, y el crate `windows` YA está en el grafo de forma
+# transitiva vía wgpu-hal/gpu-allocator/accesskit_windows, así que activar estas
+# features no añade ningún crate nuevo. Se usa el códec que Windows ya trae: no
+# distribuimos decodificadores, lo que evita tanto el peso (gate de 30 MB del
+# MSI) como la exposición a patentes de H.264.
+# El delay-load de mfplat.dll en build.rs es obligatorio: las ediciones "N" de
+# Windows no traen Media Foundation y un import estático impediría arrancar.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    # SetCurrentPosition y GetPresentationAttribute están gateadas tras estas
+    # dos: devuelven/aceptan PROPVARIANT.
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_System_LibraryLoader",
+    # PropVariantToUInt64, usado para leer MF_PD_DURATION.
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+# Salida de audio (WASAPI en Windows) — licencia Apache-2.0, estándar del
+# ecosistema. El volumen se aplica escalando PCM, no tocando el mezclador.
+cpal = "0.16"

@@ -101,6 +101,18 @@ pub struct Translations {
     pub menu_file: &'static str,
     pub menu_view: &'static str,
     pub menu_help: &'static str,
+    pub video_play_pause: &'static str,
+    pub video_seek_forward: &'static str,
+    pub video_seek_backward: &'static str,
+    pub video_volume_up: &'static str,
+    pub video_volume_down: &'static str,
+    pub video_toggle_mute: &'static str,
+    pub video_volume: &'static str,
+    pub video_autoplay: &'static str,
+    pub video_error: &'static str,
+    pub video_unsupported: &'static str,
+    pub video_no_audio: &'static str,
+    pub video_loading: &'static str,
 }
 
 const ES: Translations = Translations {
@@ -192,6 +204,18 @@ const ES: Translations = Translations {
     menu_file: "Archivo",
     menu_view: "Ver",
     menu_help: "Ayuda",
+    video_play_pause: "Reproducir / Pausar",
+    video_seek_forward: "Avanzar 5 s",
+    video_seek_backward: "Retroceder 5 s",
+    video_volume_up: "Subir volumen",
+    video_volume_down: "Bajar volumen",
+    video_toggle_mute: "Silenciar",
+    video_volume: "Volumen",
+    video_autoplay: "Reproducción automática",
+    video_error: "No se pudo reproducir el video:",
+    video_unsupported: "Este sistema no puede reproducir este video",
+    video_no_audio: "Sin pista de audio",
+    video_loading: "Abriendo video…",
 };
 
 const EN: Translations = Translations {
@@ -283,6 +307,18 @@ const EN: Translations = Translations {
     menu_file: "File",
     menu_view: "View",
     menu_help: "Help",
+    video_play_pause: "Play / Pause",
+    video_seek_forward: "Forward 5 s",
+    video_seek_backward: "Back 5 s",
+    video_volume_up: "Volume up",
+    video_volume_down: "Volume down",
+    video_toggle_mute: "Mute",
+    video_volume: "Volume",
+    video_autoplay: "Autoplay",
+    video_error: "Could not play the video:",
+    video_unsupported: "This system cannot play this video",
+    video_no_audio: "No audio track",
+    video_loading: "Opening video…",
 };
 #[macro_export]
 macro_rules! t {

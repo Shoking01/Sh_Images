@@ -100,6 +100,10 @@ pub fn keybinding_from_egui(key: egui::Key, modifiers: egui::Modifiers) -> Optio
     let code = match key {
         egui::Key::ArrowLeft => KeyCode::ArrowLeft,
         egui::Key::ArrowRight => KeyCode::ArrowRight,
+        egui::Key::ArrowUp => KeyCode::ArrowUp,
+        egui::Key::ArrowDown => KeyCode::ArrowDown,
+        egui::Key::Space => KeyCode::Space,
+        egui::Key::M => KeyCode::KeyM,
         egui::Key::F => KeyCode::KeyF,
         egui::Key::H => KeyCode::KeyH,
         egui::Key::I => KeyCode::KeyI,

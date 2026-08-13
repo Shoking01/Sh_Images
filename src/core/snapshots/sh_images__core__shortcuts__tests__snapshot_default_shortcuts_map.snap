@@ -1,5 +1,6 @@
 ---
 source: src/core/shortcuts.rs
+assertion_line: 359
 expression: s
 ---
 [bindings.open]
@@ -57,3 +58,27 @@ modifiers = "none"
 [bindings.edit_shortcuts]
 key = "key_k"
 modifiers = "ctrl"
+
+[bindings.video_play_pause]
+key = "space"
+modifiers = "none"
+
+[bindings.video_seek_forward]
+key = "arrow_right"
+modifiers = "ctrl"
+
+[bindings.video_seek_backward]
+key = "arrow_left"
+modifiers = "ctrl"
+
+[bindings.video_volume_up]
+key = "arrow_up"
+modifiers = "ctrl"
+
+[bindings.video_volume_down]
+key = "arrow_down"
+modifiers = "ctrl"
+
+[bindings.video_toggle_mute]
+key = "key_m"
+modifiers = "none"

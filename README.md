@@ -45,7 +45,11 @@ ensuring instant navigation.
 - **Navigation** — arrow keys through folder images, sidebar thumbnails with scroll
 - **EXIF metadata** — camera model, ISO, aperture, focal length, date, dimensions
 - **Animated GIF** — looped playback with frame timing
-- **Slideshow** — auto-advance (configurable 1–60 s interval)
+- **Video playback** (Windows) — MP4/M4V/MOV with audio, play/pause, ±5 s seek,
+  volume, mute and autoplay. Uses the system decoder (Media Foundation): no
+  bundled codecs, ~205 KB of binary
+- **Slideshow** — auto-advance (configurable 1–60 s interval); waits for a
+  playing video to finish
 - **Fullscreen** — F11 toggle, borderless window
 - **Dark/light themes** — persisted between sessions
 - **Configurable shortcuts** — edit keybindings via in-app dialog
@@ -62,6 +66,14 @@ ensuring instant navigation.
 | WebP | Lossy + lossless | ✅ Supported |
 | TIFF | Multi-page | ✅ Supported |
 | AVIF | AV1-based | ✅ Supported |
+| MP4 / M4V / MOV | H.264, HEVC, AAC | ✅ Windows only |
+
+Video decoding uses Windows Media Foundation, so the available codecs are
+whatever the system provides — HEVC, for instance, needs an extension from the
+Microsoft Store. Unsupported files report an error instead of failing silently.
+On Linux and macOS the app builds and runs, but video files report
+"unsupported". MKV and WebM are deliberately excluded: they depend on Store
+extensions that may not be installed.
 
 ### Installation
 
@@ -101,6 +113,8 @@ cache_memory_limit_mb = 512
 theme = "dark"
 slideshow_interval_secs = 5
 language = "en"
+video_autoplay = true
+video_volume_percent = 80
 ```
 
 First run creates defaults. Atomic write (temp + rename) prevents corruption.
@@ -110,7 +124,8 @@ First run creates defaults. Atomic write (temp + rename) prevents corruption.
 # Run all checks before committing
 cargo check && cargo clippy --all-targets -- -D warnings && cargo fmt --check && cargo test
 
-# Integration tests (9 flows: open, navigate, zoom, error, config, rotate, EXIF, GIF, slideshow)
+# Integration tests (15 flows: open, navigate, zoom, error, config, rotate, EXIF,
+# GIF, slideshow, video playback, seek, volume, autoplay, corrupt video, mixed folder)
 cargo test --test integration
 
 # Performance benchmarks (criterion)

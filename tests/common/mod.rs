@@ -37,6 +37,64 @@ pub fn make_folder_with_images(n: usize) -> (tempfile::TempDir, Vec<PathBuf>) {
     (dir, paths)
 }
 
+/// Crea un `.mp4` vacío (0 bytes).
+///
+/// No se committea ningún video real: `image 0.25` no encodea contenedores y
+/// añadir un muxer sólo para el test rompería la justificación de dependencias
+/// (AGENTS.md §7.2). Toda la lógica de reproducción es aritmética pura y se
+/// testea sin archivo; aquí sólo hace falta *una ruta* con extensión de video.
+pub fn empty_video_path(dir: &Path) -> PathBuf {
+    let path = dir.join("vacio.mp4");
+    fs::write(&path, b"").expect("escribir video vacío");
+    path
+}
+
+/// Crea un `.mp4` con contenido que no es un contenedor válido.
+pub fn corrupt_video_path(dir: &Path) -> PathBuf {
+    let path = dir.join("corrupto.mp4");
+    fs::write(&path, b"esto no es un contenedor mp4").expect("escribir video corrupto");
+    path
+}
+
+/// Guarda un PNG válido con extensión `.mp4`.
+///
+/// La clasificación es por extensión, así que esto debe seguir contando como
+/// video; validar el contenido es del backend.
+pub fn png_renamed_as_mp4(dir: &Path) -> PathBuf {
+    let path = dir.join("disfrazado.mp4");
+    gradient_image(8, 8)
+        .save_with_format(&path, ImageFormat::Png)
+        .expect("guardar png disfrazado");
+    path
+}
+
+/// Carpeta temp con imágenes, videos y un `.txt` que debe quedar fuera.
+///
+/// Devuelve `(TempDir, rutas ordenadas de los medios soportados)`.
+pub fn make_folder_with_mixed_media(
+    images: usize,
+    videos: usize,
+) -> (tempfile::TempDir, Vec<PathBuf>) {
+    let dir = tempdir().expect("tempdir en test");
+    let mut paths = Vec::with_capacity(images + videos);
+    for i in 0..images {
+        let path = dir.path().join(format!("img_{i:04}.jpg"));
+        gradient_image(32, 32)
+            .save_with_format(&path, ImageFormat::Jpeg)
+            .expect("guardar imagen sintética");
+        paths.push(path);
+    }
+    for i in 0..videos {
+        let path = dir.path().join(format!("vid_{i:04}.mp4"));
+        fs::write(&path, b"").expect("escribir video de prueba");
+        paths.push(path);
+    }
+    // Un archivo que no debe aparecer en la navegación.
+    fs::write(dir.path().join("notas.txt"), b"x").expect("escribir txt");
+    paths.sort();
+    (dir, paths)
+}
+
 /// Crea una carpeta temp con `n` imágenes `.jpg` sintéticas de `w`x`h`.
 ///
 /// Devuelve `(TempDir, rutas ordenadas)`. `TempDir` se elimina al dropear.

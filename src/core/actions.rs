@@ -28,6 +28,12 @@ pub enum Action {
     ApplyCrop,
     SetLangEs,
     SetLangEn,
+    VideoPlayPause,
+    VideoSeekForward,
+    VideoSeekBackward,
+    VideoVolumeUp,
+    VideoVolumeDown,
+    VideoToggleMute,
 }
 
 impl Action {
@@ -57,6 +63,12 @@ impl Action {
             Action::ApplyCrop => t.apply_crop,
             Action::SetLangEs => "🌐 ES",
             Action::SetLangEn => "🌐 EN",
+            Action::VideoPlayPause => t.video_play_pause,
+            Action::VideoSeekForward => t.video_seek_forward,
+            Action::VideoSeekBackward => t.video_seek_backward,
+            Action::VideoVolumeUp => t.video_volume_up,
+            Action::VideoVolumeDown => t.video_volume_down,
+            Action::VideoToggleMute => t.video_toggle_mute,
         }
     }
     pub fn default_shortcut(self) -> Option<KeyBinding> {
@@ -84,9 +96,17 @@ impl Action {
             Action::ApplyCrop => None,
             Action::SetLangEs => None,
             Action::SetLangEn => None,
+            // Espacio y Ctrl+flechas están libres: las flechas peladas ya son
+            // Prev/Next y ShortcutMap::defaults() no detecta conflictos.
+            Action::VideoPlayPause => Some(KeyBinding::new(KeyCode::Space, Modifiers::None)),
+            Action::VideoSeekForward => Some(KeyBinding::new(KeyCode::ArrowRight, Modifiers::Ctrl)),
+            Action::VideoSeekBackward => Some(KeyBinding::new(KeyCode::ArrowLeft, Modifiers::Ctrl)),
+            Action::VideoVolumeUp => Some(KeyBinding::new(KeyCode::ArrowUp, Modifiers::Ctrl)),
+            Action::VideoVolumeDown => Some(KeyBinding::new(KeyCode::ArrowDown, Modifiers::Ctrl)),
+            Action::VideoToggleMute => Some(KeyBinding::new(KeyCode::KeyM, Modifiers::None)),
         }
     }
-    pub fn all() -> [Action; 23] {
+    pub fn all() -> [Action; 29] {
         [
             Action::Open,
             Action::Prev,
@@ -111,9 +131,31 @@ impl Action {
             Action::ApplyCrop,
             Action::SetLangEs,
             Action::SetLangEn,
+            Action::VideoPlayPause,
+            Action::VideoSeekForward,
+            Action::VideoSeekBackward,
+            Action::VideoVolumeUp,
+            Action::VideoVolumeDown,
+            Action::VideoToggleMute,
         ]
     }
 }
+
+/// Acciones que sólo se invocan desde la UI y no llevan atajo por defecto.
+///
+/// Antes esta lista estaba duplicada entre `actions.rs` y `shortcuts.rs`, con
+/// el riesgo de que se desincronizaran.
+pub const NO_SHORTCUT: &[Action] = &[
+    Action::SetDefaultViewer,
+    Action::Edit,
+    Action::SaveCopy,
+    Action::SaveAs,
+    Action::CancelEdit,
+    Action::ResetEdit,
+    Action::ApplyCrop,
+    Action::SetLangEs,
+    Action::SetLangEn,
+];
 
 #[cfg(test)]
 mod tests {
@@ -132,19 +174,8 @@ mod tests {
 
     #[test]
     fn every_action_has_a_default_shortcut_except_ui_only() {
-        let no_shortcut = &[
-            Action::SetDefaultViewer,
-            Action::Edit,
-            Action::SaveCopy,
-            Action::SaveAs,
-            Action::CancelEdit,
-            Action::ResetEdit,
-            Action::ApplyCrop,
-            Action::SetLangEs,
-            Action::SetLangEn,
-        ];
         for action in Action::all() {
-            if no_shortcut.contains(&action) {
+            if NO_SHORTCUT.contains(&action) {
                 assert!(
                     action.default_shortcut().is_none(),
                     "{action:?} no debe tener atajo por defecto"
@@ -180,11 +211,41 @@ mod tests {
     }
 
     #[test]
-    fn all_returns_twenty_three_actions() {
+    fn all_returns_twenty_nine_actions() {
         let all = Action::all();
-        assert_eq!(all.len(), 23);
+        assert_eq!(all.len(), 29);
         let unique: std::collections::HashSet<_> = all.into_iter().collect();
-        assert_eq!(unique.len(), 23, "sin variantes duplicadas");
+        assert_eq!(unique.len(), 29, "sin variantes duplicadas");
+    }
+
+    #[test]
+    fn no_shortcut_list_matches_the_actions_without_a_default() {
+        // Fija que la constante compartida y `default_shortcut` no se
+        // desincronicen: antes esta lista estaba duplicada en dos archivos.
+        for action in Action::all() {
+            assert_eq!(
+                NO_SHORTCUT.contains(&action),
+                action.default_shortcut().is_none(),
+                "{action:?} no coincide con NO_SHORTCUT"
+            );
+        }
+    }
+
+    #[test]
+    fn video_actions_have_shortcuts() {
+        for action in [
+            Action::VideoPlayPause,
+            Action::VideoSeekForward,
+            Action::VideoSeekBackward,
+            Action::VideoVolumeUp,
+            Action::VideoVolumeDown,
+            Action::VideoToggleMute,
+        ] {
+            assert!(
+                action.default_shortcut().is_some(),
+                "{action:?} debería traer atajo"
+            );
+        }
     }
 
     #[test]
