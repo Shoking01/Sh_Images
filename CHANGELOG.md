@@ -5,7 +5,7 @@ All notable changes to Sh_Images will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.4] - 2026-08-12
 
 ### Added
 
@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open time, which also fixes files with several audio tracks (game recorders
   typically write game audio and microphone as separate tracks, with video not
   at index 0).
+- **CI clippy on Linux/macOS** — `ramp_coefficient` and `AudioDevice.channels`
+  are used only by the Windows audio backend; the unconditional import and field
+  failed `cargo clippy -- -D warnings` on non-Windows targets, so both are now
+  gated behind `#[cfg(windows)]`.
 
 ## [0.2.3] - 2026-08-08
 
