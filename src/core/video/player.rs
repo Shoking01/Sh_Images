@@ -13,7 +13,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use super::audio::{buffer_capacity, ramp_coefficient, AudioBuffer};
+#[cfg(windows)]
+use super::audio::ramp_coefficient;
+use super::audio::{buffer_capacity, AudioBuffer};
 use super::backend::{self, Sample};
 use super::clock::{audio_position, PlayClock};
 use super::playback::{next_state, should_restart_from_zero, PlaybackEvent, PlaybackState};
@@ -577,6 +579,7 @@ struct AudioDevice {
     #[cfg(windows)]
     config: cpal::StreamConfig,
     sample_rate: u32,
+    #[cfg(windows)]
     channels: usize,
 }
 
