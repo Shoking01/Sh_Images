@@ -652,11 +652,23 @@ struct AudioDevice {
 /// STA sobre el hilo que lo llama, y el hilo decodificador tiene que quedarse
 /// en MTA para Media Foundation.
 fn audio_sample_rate_probe() -> u32 {
+    // On CI headless Windows (and in unit tests) cpal can AV when no device exists.
+    // Tests open missing files and only need the error path — audio rate is irrelevant.
+    if cfg!(test) {
+        return 0;
+    }
+    // Also skip probe on CI env where no audio hardware exists (extra safety for integration tests)
+    if std::env::var("CI").is_ok() {
+        return 0;
+    }
     audio_device().map(|d| d.sample_rate).unwrap_or(0)
 }
 
 #[cfg(windows)]
 fn audio_device() -> Option<AudioDevice> {
+    if cfg!(test) {
+        return None;
+    }
     use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
     let device = host.default_output_device()?;
