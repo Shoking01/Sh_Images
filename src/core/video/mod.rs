@@ -15,9 +15,8 @@ pub mod audio;
 pub mod autoplay;
 pub mod backend;
 pub mod clock;
+pub mod ffmpeg;
 pub mod format;
-#[cfg(windows)]
-pub mod mf;
 pub mod playback;
 pub mod player;
 pub mod ring;
@@ -49,6 +48,8 @@ pub struct VideoInfo {
     /// `false` en streams no indexados: hay que deshabilitar los controles de
     /// avance y retroceso.
     pub can_seek: bool,
+    /// `true` si HW accel está activo (Slice2 `hwaccel`); Slice1 siempre false.
+    pub hw_active: bool,
 }
 
 /// Rotación total a aplicar: la del usuario más la del contenedor.

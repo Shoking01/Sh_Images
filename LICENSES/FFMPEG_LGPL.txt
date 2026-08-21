@@ -1,0 +1,32 @@
+FFmpeg LGPL Attribution — Sh_Images
+==================================
+
+Sh_Images bundles FFmpeg shared libraries dynamically (LGPL-2.1).
+
+FFmpeg libraries included (per platform):
+- avcodec-61.dll / libavcodec.so.61 / libavcodec.61.dylib
+- avformat-61.dll / libavformat.so.61
+- avutil-59.dll / libavutil.so.59
+- swscale-8.dll / libswscale.so.8
+- swresample-5.dll / libswresample.so.5
+
+Source: https://ffmpeg.org
+License: GNU Lesser General Public License v2.1 (LGPL-2.1)
+License text: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt
+
+This distribution uses DYNAMIC linking only — no static LGPL code is
+embedded in sh_images.exe. DLLs/so/dylibs are shipped alongside the
+binary and may be replaced by the user with a compatible LGPL build.
+
+Compliance notes:
+- DLLs are bundled via WiX MSI with EmbedCab=yes (see installer/windows/Files.wxs).
+- License attribution shipped in MSI as LICENSES/FFMPEG_LGPL.txt.
+- Build does not enable `static` feature of ffmpeg-next; Cargo.toml uses
+  ffmpeg-next = { version = "7", optional = true } (dynamic by default).
+- N-Edition Windows: if DLLs are absent, backend::is_available() returns false
+  and the app runs without video (no crash) — see src/core/video/ffmpeg.rs probe.
+
+To obtain FFmpeg source matching the bundled binaries, see the FFmpeg
+release tag used at build time (ffmpeg 7.x) at https://github.com/FFmpeg/FFmpeg.
+
+For LGPL compliance questions, contact the Sh_Images maintainers.

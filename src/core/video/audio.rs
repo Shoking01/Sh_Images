@@ -14,7 +14,13 @@ use std::sync::Mutex;
 pub const RAMP_SECONDS: f32 = 0.015;
 
 /// Segundos de audio que se mantienen en cola como colchón.
-pub const AUDIO_BUFFER_SECONDS: f32 = 0.5;
+///
+/// Subido de 0.5 a 1.5 s: con 0.5 s, un hipo del consumidor de frames de
+/// video (repintado de la UI) que superase ese margen vaciaba el buffer
+/// antes de que el decodificador se pusiera al día, y sonaba como un
+/// petardeo. 1.5 s da mucho más margen sin notarse en la latencia de
+/// arranque ni en los saltos (el buffer se vacía con `AudioBuffer::flush`).
+pub const AUDIO_BUFFER_SECONDS: f32 = 1.5;
 
 /// Coeficiente del filtro de un polo que suaviza el cambio de ganancia.
 pub fn ramp_coefficient(sample_rate: u32) -> f32 {
@@ -119,7 +125,7 @@ impl AudioBuffer {
         let mut q = self.lock();
         let room = self.capacity.saturating_sub(q.len());
         let n = room.min(samples.len());
-        q.extend(&samples[..n]);
+        q.extend(&samples[..n]); // el resto se TIRA
         n
     }
 
@@ -146,7 +152,7 @@ impl AudioBuffer {
         let result = apply_gain_ramp(out, gain, target, k);
         let ch = channels.max(1);
         self.frames_played
-            .fetch_add((n / ch) as u64, Ordering::Relaxed);
+            .fetch_add((out.len() / ch) as u64, Ordering::Relaxed);
         result
     }
 }
@@ -215,10 +221,11 @@ mod tests {
 
     #[test]
     fn buffer_capacity_scales_with_rate_and_channels() {
-        assert_eq!(buffer_capacity(48_000, 2), 48_000);
-        assert_eq!(buffer_capacity(48_000, 1), 24_000);
+        // 48 000 Hz × 1.5 s = 72 000 frames por canal.
+        assert_eq!(buffer_capacity(48_000, 2), 144_000);
+        assert_eq!(buffer_capacity(48_000, 1), 72_000);
         // channels = 0 se trata como 1 en vez de dar capacidad cero.
-        assert_eq!(buffer_capacity(48_000, 0), 24_000);
+        assert_eq!(buffer_capacity(48_000, 0), 72_000);
     }
 
     #[test]

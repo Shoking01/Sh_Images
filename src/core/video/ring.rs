@@ -19,8 +19,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
-/// Frames en vuelo. Tres da ~100 ms de colchón a 30 fps y 23,7 MiB a 1080p.
-pub const RING_CAPACITY: usize = 3;
+/// Frames en vuelo. Subido de 3 a 6: con 3 (~100 ms a 30 fps), cualquier
+/// hipo del consumidor (repintado de la UI) de más de ese margen dejaba al
+/// decodificador bloqueado esperando hueco casi de inmediato, y como
+/// bloquea el mismo hilo que decodifica audio, el audio se cortaba también.
+/// 6 da ~200 ms de colchón (49,7 MiB a 1080p) sin salirse del presupuesto de
+/// 64 MiB verificado en `capacity_bytes_stays_under_the_budget_at_1080p`.
+pub const RING_CAPACITY: usize = 6;
 
 /// Tope de resolución de salida. A 4K un frame RGBA son 31,6 MiB y tres
 /// llenarían 95 MiB; Media Foundation puede escalar gratis en el mismo paso de

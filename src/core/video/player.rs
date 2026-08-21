@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use super::audio::ramp_coefficient;
 use super::audio::{buffer_capacity, AudioBuffer};
-use super::backend::{self, Sample};
+use super::backend::{self, Decoder, Sample};
 use super::clock::{audio_position, PlayClock};
 use super::playback::{next_state, should_restart_from_zero, PlaybackEvent, PlaybackState};
 use super::ring::{FrameRing, VideoFrame};
@@ -281,10 +281,8 @@ impl VideoPlayer {
         self.pending_seek = None;
         self.last_seek_request = None;
         self.ring.bump_epoch();
-        self.audio.flush();
         {
             let mut s = self.shared();
-            s.seek_base = target;
             s.reached_end = false;
         }
         self.send(PlayerCommand::SeekTo(target));
@@ -414,6 +412,34 @@ fn lock(s: &Arc<Mutex<Shared>>) -> std::sync::MutexGuard<'_, Shared> {
     s.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// Ejecuta un salto en el hilo decodificador.
+///
+/// El flush del audio y el reset de `seek_base` ocurren AQUÍ, después de que
+/// el backend acepta el salto, y no en el hilo de UI: el audio viejo (anterior
+/// al salto) no puede sonar con la base de posición nueva. También se arma el
+/// filtro de pre-roll: MF aterriza en el fotograma clave anterior al objetivo,
+/// así que las primeras muestras traen PTS anterior a `target` y hay que
+/// descartarlas hasta que el stream llegue al objetivo.
+fn apply_seek(
+    decoder: &mut Box<dyn Decoder>,
+    audio: &AudioBuffer,
+    shared: &Arc<Mutex<Shared>>,
+    seek_target: &mut Option<Duration>,
+    target: Duration,
+) {
+    if let Err(e) = decoder.seek(target) {
+        tracing::debug!(error = %e, "el salto falló");
+        return;
+    }
+    audio.flush();
+    {
+        let mut s = lock(shared);
+        s.seek_base = target;
+        s.reached_end = false;
+    }
+    *seek_target = Some(target);
+}
+
 /// Cuerpo del hilo decodificador. Todo COM vive y muere aquí.
 #[allow(clippy::too_many_arguments)]
 fn decoder_thread(
@@ -449,7 +475,7 @@ fn decoder_thread(
         }
     };
 
-    let info = decoder.info();
+    let mut info = decoder.info();
     {
         let mut s = lock(&shared);
         s.info = info;
@@ -458,13 +484,23 @@ fn decoder_thread(
     }
 
     // El stream de cpal vive en este hilo: `cpal::Stream` no es `Send`.
-    let _stream = if info.has_audio {
+    let stream = if info.has_audio {
         audio_device().and_then(|d| start_audio_stream(d, Arc::clone(&audio)))
     } else {
         None
     };
+    if info.has_audio && stream.is_none() {
+        // Sin salida de audio real: el audio no puede ser reloj maestro
+        // ni fuente de contrapresión, o el video se congela.
+        info.has_audio = false;
+        lock(&shared).info.has_audio = false;
+        lock(&shared).audio_sample_rate = 0;
+    }
+    let _stream = stream;
 
     let mut playing = autoplay;
+    let mut seek_target: Option<Duration> = None;
+    let mut duration_poll_count: u64 = 0;
     loop {
         if shutdown.load(Ordering::Acquire) {
             break;
@@ -476,10 +512,7 @@ fn decoder_thread(
                 Ok(PlayerCommand::Play) => playing = true,
                 Ok(PlayerCommand::Pause) => playing = false,
                 Ok(PlayerCommand::SeekTo(target)) => {
-                    if let Err(e) = decoder.seek(target) {
-                        tracing::debug!(error = %e, "el salto falló");
-                    }
-                    lock(&shared).reached_end = false;
+                    apply_seek(&mut decoder, &audio, &shared, &mut seek_target, target);
                 }
                 Ok(PlayerCommand::Shutdown) => return,
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -500,10 +533,7 @@ fn decoder_thread(
                 Ok(PlayerCommand::Play) => playing = true,
                 Ok(PlayerCommand::Pause) => {}
                 Ok(PlayerCommand::SeekTo(target)) => {
-                    if let Err(e) = decoder.seek(target) {
-                        tracing::debug!(error = %e, "el salto falló");
-                    }
-                    lock(&shared).reached_end = false;
+                    apply_seek(&mut decoder, &audio, &shared, &mut seek_target, target);
                 }
                 Ok(PlayerCommand::Shutdown) | Err(_) => break,
             }
@@ -514,10 +544,7 @@ fn decoder_thread(
             // Terminado: esperar a un salto o a que se reanude.
             match cmd_rx.recv() {
                 Ok(PlayerCommand::SeekTo(target)) => {
-                    if let Err(e) = decoder.seek(target) {
-                        tracing::debug!(error = %e, "el salto falló");
-                    }
-                    lock(&shared).reached_end = false;
+                    apply_seek(&mut decoder, &audio, &shared, &mut seek_target, target);
                 }
                 Ok(PlayerCommand::Play) => playing = true,
                 Ok(PlayerCommand::Pause) => playing = false,
@@ -526,17 +553,22 @@ fn decoder_thread(
             continue;
         }
 
-        // Contrapresión: si no hay hueco, esperar un poco en vez de girar.
+        // Contrapresión: se espera si CUALQUIERA de los dos buffers está
+        // lleno. Dejar que el video corra libre mientras sólo el audio frena
+        // (como probamos antes) hace que el decode se adelante segundos a la
+        // reproducción real: el ring (sólo 3 huecos) se llena enseguida con
+        // los primeros frames y se queda ahí, porque nada nuevo entra hasta
+        // que el audio se llena del todo — para entonces esos frames ya están
+        // obsoletos y se descartan, dejando el ring vacío y la imagen
+        // congelada aunque el audio siga avanzando. El ring necesita seguir
+        // frenando el decode para mantenerse cerca del tiempo real.
         if ring.is_full() || (info.has_audio && audio.is_full()) {
             match cmd_rx.recv_timeout(Duration::from_millis(4)) {
                 Ok(PlayerCommand::Shutdown) => break,
                 Ok(PlayerCommand::Play) => playing = true,
                 Ok(PlayerCommand::Pause) => playing = false,
                 Ok(PlayerCommand::SeekTo(target)) => {
-                    if let Err(e) = decoder.seek(target) {
-                        tracing::debug!(error = %e, "el salto falló");
-                    }
-                    lock(&shared).reached_end = false;
+                    apply_seek(&mut decoder, &audio, &shared, &mut seek_target, target);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -547,22 +579,53 @@ fn decoder_thread(
         let epoch = ring.epoch();
         match decoder.next_sample() {
             Ok(Sample::Video(frame)) => {
+                // El video pre-roll del salto lo descarta la UI vía `epoch` +
+                // `frame_decision` (Drop). El bloqueo aquí es intencional: es
+                // lo que mantiene al decodificador cerca del ritmo real. Ver
+                // el comentario del gate de contrapresión más arriba sobre
+                // por qué `try_push` (sin bloquear) resultó peor, no mejor.
                 if !ring.push(epoch, frame) && ring.is_closed() {
                     break;
                 }
             }
-            Ok(Sample::Audio { samples, .. }) => {
+            Ok(Sample::Audio { pts, samples }) => {
+                if seek::discard_before_seek_target(pts, seek_target) {
+                    // Pre-roll del salto: descartar audio anterior al objetivo.
+                    continue;
+                }
+                // El audio ya alcanzó el objetivo: el filtro cumplió su papel.
+                seek_target = None;
                 if !samples.is_empty() {
                     audio.push(&samples);
                 }
             }
             Ok(Sample::EndOfStream) => {
+                // Al llegar al final la duración ya debería ser conocida; si
+                // no lo era, éste es el último momento para averiguarla.
+                if info.duration.is_none() {
+                    if let Some(d) = decoder.refresh_duration() {
+                        info.duration = Some(d);
+                        lock(&shared).info.duration = Some(d);
+                    }
+                }
                 lock(&shared).reached_end = true;
             }
             Err(e) => {
                 tracing::warn!(error = %e, "fallo al decodificar; se detiene el video");
                 lock(&shared).error = Some(e.to_string());
                 break;
+            }
+        }
+
+        // Algunos contenedores no reportan la duración hasta leer parte del
+        // archivo; re-consultarla periódicamente mientras siga desconocida.
+        if info.duration.is_none() {
+            duration_poll_count += 1;
+            if duration_poll_count.is_multiple_of(30) {
+                if let Some(d) = decoder.refresh_duration() {
+                    info.duration = Some(d);
+                    lock(&shared).info.duration = Some(d);
+                }
             }
         }
     }

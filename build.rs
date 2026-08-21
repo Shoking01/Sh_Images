@@ -20,24 +20,13 @@ use resvg::usvg::{self, Tree as UsvgTree};
 const ICON_SIZES: &[u32] = &[16, 32, 48, 64, 128, 256];
 const VIEWBOX_SIZE: f32 = 512.0;
 
-/// DLLs de Media Foundation que se enlazan con carga diferida.
-///
-/// El crate `windows` las enlaza por tabla de importación estática. Las
-/// ediciones **N** de Windows no traen Media Foundation hasta que se instala el
-/// Media Feature Pack, y con import estático el cargador del sistema aborta el
-/// proceso **antes de `main()`**: la app no arrancaría ni para ver un PNG.
-/// Con `/DELAYLOAD` la resolución se pospone a la primera llamada, y
-/// `core::video::mf::is_available()` la comprueba antes de tocar nada.
-#[cfg(target_env = "msvc")]
-const DELAY_LOADED_DLLS: &[&str] = &["mfplat.dll", "mfreadwrite.dll"];
+// FFmpeg Slice1: DELAYLOAD for mfplat/mfreadwrite removed — no MF dependency.
+// FFmpeg DLLs (avcodec-61.dll etc.) are loaded at runtime via LoadLibraryW probe
+// (`backend::is_available`). No delayimp.lib needed.
 
 #[cfg(target_env = "msvc")]
 fn configure_delay_load() {
-    for dll in DELAY_LOADED_DLLS {
-        println!("cargo:rustc-link-arg-bins=/DELAYLOAD:{dll}");
-    }
-    // delayimp.lib provee el thunk __delayLoadHelper2 que hace la resolución.
-    println!("cargo:rustc-link-arg-bins=delayimp.lib");
+    // Intentionally empty — MF DELAYLOAD removed in ffmpeg-video-backend Slice1.
 }
 
 #[cfg(not(target_env = "msvc"))]

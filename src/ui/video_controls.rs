@@ -264,6 +264,7 @@ mod tests {
                 has_audio: true,
                 container_rotation: 0,
                 can_seek: true,
+                hw_active: false,
             },
             volume: 80,
             muted: false,
