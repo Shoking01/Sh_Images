@@ -8,6 +8,16 @@
       <Component Id="AppComponents" Guid="B2C4D6E8-F1A3-4B5C-9D8E-0F1E2D3C4B5A">
         <File Id="ShImagesExe" Source="$(var.ReleaseDir)\sh_images.exe" KeyPath="yes" />
         <File Id="AppIconFile" Source="icon.ico" />
+        <!-- FFmpeg LGPL dynamic DLLs — bundled alongside exe, EmbedCab=yes in Product.wxs (REQ-FF-012).
+             Source DLLs are expected at $(var.ReleaseDir) after `cargo build --release --features video`
+             or copied from FFmpeg LGPL build. WiX harvest does not auto-include them. -->
+        <File Id="AvCodecDll" Source="$(var.ReleaseDir)\avcodec-61.dll" />
+        <File Id="AvFormatDll" Source="$(var.ReleaseDir)\avformat-61.dll" />
+        <File Id="AvUtilDll" Source="$(var.ReleaseDir)\avutil-59.dll" />
+        <File Id="SwScaleDll" Source="$(var.ReleaseDir)\swscale-8.dll" />
+        <File Id="SwResampleDll" Source="$(var.ReleaseDir)\swresample-5.dll" />
+        <!-- LGPL attribution shipped in MSI -->
+        <File Id="FfmpegLgplLicense" Source="..\..\LICENSES\FFMPEG_LGPL.txt" />
       </Component>
     </DirectoryRef>
   </Fragment>

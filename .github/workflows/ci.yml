@@ -34,6 +34,39 @@ jobs:
       # Compila los benches sin ejecutarlos: los rompe cualquier cambio de API
       # y hoy nada los cubría.
       - run: cargo bench --no-run
+      # LGPL gate (REQ-FF-012): fail on static ffmpeg linking, missing DLLs in MSI, missing license
+      - name: LGPL gate — dynamic only, DLLs bundled, license packaged
+        shell: bash
+        run: |
+          echo "LGPL gate: checking Cargo.toml has no ffmpeg-next static feature..."
+          if grep -q 'ffmpeg-next.*static' Cargo.toml; then
+            echo "::error::Cargo.toml enables ffmpeg-next static — LGPL requires dynamic only"
+            exit 1
+          fi
+          echo "Checking Files.wxs bundles FFmpeg DLLs..."
+          for dll in avcodec avformat avutil swscale swresample; do
+            if ! grep -qi "$dll" installer/windows/Files.wxs; then
+              echo "::error::Files.wxs missing $dll DLL"
+              exit 1
+            fi
+          done
+          if ! grep -q 'EmbedCab="yes"' installer/windows/Product.wxs; then
+            echo "::error::Product.wxs missing EmbedCab yes"
+            exit 1
+          fi
+          if ! grep -q 'FFMPEG_LGPL' installer/windows/Files.wxs && ! grep -q 'LICENSES' installer/windows/Files.wxs; then
+            echo "::error::Files.wxs must package LICENSES/FFMPEG_LGPL.txt"
+            exit 1
+          fi
+          if [ ! -f LICENSES/FFMPEG_LGPL.txt ]; then
+            echo "::error::LICENSES/FFMPEG_LGPL.txt missing"
+            exit 1
+          fi
+          if ! grep -qi "lgpl" docs/licenses.md; then
+            echo "::error::docs/licenses.md must mention LGPL"
+            exit 1
+          fi
+          echo "LGPL gate passed."
 
   # La MSRV declarada en Cargo.toml no se verificaba en ningún sitio. Un backend
   # de medios es exactamente el tipo de dependencia que la sube sin avisar.

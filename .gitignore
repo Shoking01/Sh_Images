@@ -13,6 +13,12 @@ installer/windows/*.msi
 installer/windows/cab*.cab
 /AGENTS.md
 /Plan.md
-/docs/
+/docs/*
+!/docs/licenses.md
+!/docs/smoke_test.md
+/docs/superpowers/
 # Local AI runtime state
 .atl/
+
+# CodeGraph local index (regenerable, no commitear)
+.codegraph/

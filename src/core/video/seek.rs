@@ -72,6 +72,20 @@ fn clamp_to_duration(value: Duration, duration: Option<Duration>) -> Duration {
     }
 }
 
+/// `true` si una muestra con `pts` debe descartarse por pertenecer al tramo
+/// anterior a un salto pendiente.
+///
+/// El decodificador aterriza en el fotograma clave anterior al objetivo, así
+/// que las primeras muestras tras un `SeekTo` pueden llevar PTS anterior al
+/// target. Reproducirlas sería oír/ver contenido ya pasado. El filtro se
+/// desactiva en cuanto llega la primera muestra con `pts >= target`.
+pub fn discard_before_seek_target(pts: Duration, seek_target: Option<Duration>) -> bool {
+    match seek_target {
+        Some(target) => pts < target,
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,5 +239,50 @@ mod tests {
         assert_eq!(position_from_fraction(-1.0, TOTAL), Duration::ZERO);
         assert_eq!(position_from_fraction(9.0, TOTAL), Duration::from_secs(60));
         assert_eq!(position_from_fraction(0.5, None), Duration::ZERO);
+    }
+
+    #[test]
+    fn discard_before_seek_target_keeps_samples_when_no_seek_pending() {
+        assert!(!discard_before_seek_target(Duration::from_secs(10), None));
+    }
+
+    #[test]
+    fn discard_before_seek_target_drops_samples_before_the_target() {
+        let pending = Some(Duration::from_secs(30));
+        assert!(discard_before_seek_target(Duration::from_secs(29), pending));
+        assert!(discard_before_seek_target(
+            Duration::from_millis(1),
+            pending
+        ));
+    }
+
+    #[test]
+    fn discard_before_seek_target_keeps_samples_from_the_target_on() {
+        let pending = Some(Duration::from_secs(30));
+        assert!(!discard_before_seek_target(
+            Duration::from_secs(30),
+            pending
+        ));
+        assert!(!discard_before_seek_target(
+            Duration::from_secs(31),
+            pending
+        ));
+        assert!(!discard_before_seek_target(
+            Duration::from_secs(60),
+            pending
+        ));
+    }
+
+    #[test]
+    fn discard_before_seek_target_with_zero_target_keeps_everything() {
+        // Un seek a cero es un reinicio: ninguna muestra es anterior.
+        assert!(!discard_before_seek_target(
+            Duration::ZERO,
+            Some(Duration::ZERO)
+        ));
+        assert!(!discard_before_seek_target(
+            Duration::from_secs(1),
+            Some(Duration::ZERO)
+        ));
     }
 }

@@ -44,6 +44,15 @@ pub trait Decoder {
 
     /// Renegocia la resolución de salida tras un cambio de tamaño de ventana.
     fn set_output_size(&mut self, width: u32, height: u32) -> Result<()>;
+
+    /// Reconsulta la duración, que algunos contenedores no reportan hasta
+    /// leer el índice. Devuelve `None` si sigue sin conocerse.
+    ///
+    /// La implementación por defecto devuelve lo ya conocido; los backends
+    /// que puedan mejorarla la sobrescriben.
+    fn refresh_duration(&mut self) -> Option<Duration> {
+        self.info().duration
+    }
 }
 
 /// Abre un archivo de video con el backend de la plataforma.
@@ -71,11 +80,48 @@ pub fn is_available() -> bool {
     platform::is_available()
 }
 
+// Slice1: FFmpeg is primary backend. MF kept for rollback comparison (deleted Slice3).
+// All platforms now route through ffmpeg stub (probe via LoadLibraryW). The
+// `video` feature enables real ffmpeg-next linking; without it we still probe
+// and return Media errors without panicking (REQ-FF-011).
+
 #[cfg(windows)]
-use super::mf as platform;
+mod ffmpeg_platform {
+    use super::{Decoder, Result};
+    use std::path::Path;
+    pub fn open(path: &Path, output_size: (u32, u32), audio_rate: u32) -> Result<Box<dyn Decoder>> {
+        super::super::ffmpeg::FfmpegDecoder::open(path, output_size, audio_rate)
+            .map(|d| Box::new(d) as Box<dyn Decoder>)
+    }
+    pub fn open_video_only(path: &Path, output_size: (u32, u32)) -> Result<Box<dyn Decoder>> {
+        super::super::ffmpeg::FfmpegDecoder::open_video_only(path, output_size)
+            .map(|d| Box::new(d) as Box<dyn Decoder>)
+    }
+    pub fn is_available() -> bool {
+        super::super::ffmpeg::is_available()
+    }
+}
+#[cfg(windows)]
+use ffmpeg_platform as platform;
 
 #[cfg(not(windows))]
-use stub as platform;
+mod ffmpeg_platform_nw {
+    use super::{Decoder, Result};
+    use std::path::Path;
+    pub fn open(path: &Path, output_size: (u32, u32), audio_rate: u32) -> Result<Box<dyn Decoder>> {
+        super::super::ffmpeg::FfmpegDecoder::open(path, output_size, audio_rate)
+            .map(|d| Box::new(d) as Box<dyn Decoder>)
+    }
+    pub fn open_video_only(path: &Path, output_size: (u32, u32)) -> Result<Box<dyn Decoder>> {
+        super::super::ffmpeg::FfmpegDecoder::open_video_only(path, output_size)
+            .map(|d| Box::new(d) as Box<dyn Decoder>)
+    }
+    pub fn is_available() -> bool {
+        super::super::ffmpeg::is_available()
+    }
+}
+#[cfg(not(windows))]
+use ffmpeg_platform_nw as platform;
 
 /// Backend inactivo para las plataformas sin decodificador.
 ///
@@ -144,5 +190,50 @@ mod tests {
             }
             _ => panic!("variante equivocada"),
         }
+    }
+
+    /// Backend mínimo para probar el contrato del trait sin tocar COM.
+    struct StubDecoder {
+        info: VideoInfo,
+    }
+
+    impl Decoder for StubDecoder {
+        fn info(&self) -> VideoInfo {
+            self.info
+        }
+
+        fn next_sample(&mut self) -> Result<Sample> {
+            Ok(Sample::EndOfStream)
+        }
+
+        fn seek(&mut self, _target: Duration) -> Result<()> {
+            Ok(())
+        }
+
+        fn set_output_size(&mut self, _width: u32, _height: u32) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn default_refresh_duration_returns_cached_info_duration() {
+        // Los backends que no sobrescriben `refresh_duration` devuelven lo ya
+        // conocido; los que sí (mf) actualizan y reportan la nueva duración.
+        let mut decoder = StubDecoder {
+            info: VideoInfo {
+                duration: Some(Duration::from_secs(90)),
+                ..VideoInfo::default()
+            },
+        };
+        assert_eq!(decoder.refresh_duration(), Some(Duration::from_secs(90)));
+        assert_eq!(decoder.info().duration, Some(Duration::from_secs(90)));
+    }
+
+    #[test]
+    fn default_refresh_duration_reports_none_when_duration_unknown() {
+        let mut decoder = StubDecoder {
+            info: VideoInfo::default(),
+        };
+        assert_eq!(decoder.refresh_duration(), None);
     }
 }
