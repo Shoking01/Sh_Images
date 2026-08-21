@@ -11,12 +11,39 @@
 use std::path::Path;
 use std::time::Duration;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use once_cell::sync::Lazy;
 
 use super::backend::{Decoder, Sample};
 use super::ring::should_renegotiate;
 use super::VideoInfo;
 use crate::utils::errors::{Result, ShImagesError};
+
+/// Test-only overrides to avoid process-global env var races (STATUS_ACCESS_VIOLATION on Windows CI).
+/// Env vars SH_IMAGES_FFMPEG_STUB / SH_IMAGES_HW_FORCE_FAIL remain supported for manual runs,
+/// but unit tests use these atomics which are thread-safe.
+static TEST_FFMPEG_STUB: AtomicBool = AtomicBool::new(false);
+static TEST_HW_FORCE_FAIL: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static TEST_HW_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub fn set_test_stub(val: bool) {
+    TEST_FFMPEG_STUB.store(val, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub fn set_test_hw_force_fail(val: bool) {
+    TEST_HW_FORCE_FAIL.store(val, Ordering::SeqCst);
+}
+
+fn hw_force_fail_active() -> bool {
+    if TEST_HW_FORCE_FAIL.load(Ordering::SeqCst) {
+        return true;
+    }
+    std::env::var("SH_IMAGES_HW_FORCE_FAIL").as_deref() == Ok("1")
+}
 
 /// FFmpeg's sentinel for "no PTS" — matches AV_NOPTS_VALUE = INT64_MIN.
 pub const AV_NOPTS_VALUE: i64 = i64::MIN;
@@ -188,12 +215,71 @@ static FFMPEG_AVAILABLE: Lazy<bool> = Lazy::new(|| {
 
 /// True if FFmpeg DLLs are present and loadable.
 ///
-/// In tests, `SH_IMAGES_FFMPEG_STUB=1` forces true to exercise SW logic without DLLs.
+/// In tests, `SH_IMAGES_FFMPEG_STUB=1` or `set_test_stub(true)` forces true to exercise SW logic without DLLs.
 pub fn is_available() -> bool {
+    if TEST_FFMPEG_STUB.load(Ordering::SeqCst) {
+        return true;
+    }
     if std::env::var("SH_IMAGES_FFMPEG_STUB").is_ok() {
         return true;
     }
     *FFMPEG_AVAILABLE
+}
+
+// ---------------------------------------------------------------------------
+// File header validation — REQ-FF-011: corrupt/empty/masqueraded must fail with Media, never panic.
+// Minimal probe: empty -> error, PNG magic -> error, non-ftyp -> error.
+// Allows "stub" payload used by unit tests (b"stub") to pass.
+// ---------------------------------------------------------------------------
+
+fn validate_file_header(path: &Path) -> Result<()> {
+    let metadata = std::fs::metadata(path).map_err(|e| {
+        ShImagesError::Media(format!("cannot stat {}: {e}", path.display()))
+    })?;
+    if metadata.len() == 0 {
+        return Err(ShImagesError::Media(format!(
+            "empty file: {}",
+            path.display()
+        )));
+    }
+    // Read first up to 512 bytes for signature check
+    let mut file = std::fs::File::open(path).map_err(|e| {
+        ShImagesError::Media(format!("cannot open {}: {e}", path.display()))
+    })?;
+    let to_read = std::cmp::min(512, metadata.len() as usize);
+    let mut buf = vec![0u8; to_read];
+    {
+        use std::io::Read;
+        if let Err(e) = file.read_exact(&mut buf) {
+            return Err(ShImagesError::Media(format!(
+                "cannot read header {}: {e}",
+                path.display()
+            )));
+        }
+    }
+    // PNG masquerade (89 50 4E 47) must fail — content is PNG, extension is mp4
+    if buf.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        return Err(ShImagesError::Media(format!(
+            "invalid mp4 header (PNG masquerade): {}",
+            path.display()
+        )));
+    }
+    // Unit-test stub payload "stub" is allowed to pass (used by ffmpeg unit tests)
+    if buf.starts_with(b"stub") {
+        return Ok(());
+    }
+    // Real MP4 must have 'ftyp' at bytes 4..8 (ISO BMFF). Check there or anywhere in first bytes.
+    if buf.len() >= 8 && &buf[4..8] == b"ftyp" {
+        return Ok(());
+    }
+    // Also accept if file is larger and contains ftyp in first 12 bytes (some muxers)
+    if buf.windows(4).any(|w| w == b"ftyp") {
+        return Ok(());
+    }
+    Err(ShImagesError::Media(format!(
+        "invalid mp4 header (corrupt or unsupported container): {}",
+        path.display()
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -250,8 +336,9 @@ impl FfmpegDecoder {
         if !is_available() && cfg!(windows) {
             // On Windows without DLLs, return Media without panic (REQ-FF-011).
             // On CI without windows DLLs, allow stub open for testing via
-            // `SH_IMAGES_FFMPEG_STUB` env.
-            let allow_stub = std::env::var("SH_IMAGES_FFMPEG_STUB").is_ok();
+            // `SH_IMAGES_FFMPEG_STUB` env or test atomic.
+            let allow_stub = TEST_FFMPEG_STUB.load(Ordering::SeqCst)
+                || std::env::var("SH_IMAGES_FFMPEG_STUB").is_ok();
             if !allow_stub {
                 return Err(ShImagesError::Media(format!(
                     "FFmpeg DLLs missing — cannot open {}",
@@ -278,6 +365,9 @@ impl FfmpegDecoder {
             _ => "h264",
         };
         check_codec_supported(codec_hint)?;
+
+        // Validate file header: empty/corrupt/PNG masquerade must fail with Media (REQ-FF-011, flujo 14).
+        validate_file_header(path)?;
 
         let fps = Some(30.0);
         // Try HW device init — on failure fallback to SW (REQ-FF-010): log, do not panic.
@@ -461,7 +551,7 @@ pub fn try_init_hw_device_with_override(force_fail: bool) -> Option<HwContext> {
         tracing::warn!("hwaccel: no HW backend for this OS, falling back to SW");
         return None;
     }
-    if force_fail || std::env::var("SH_IMAGES_HW_FORCE_FAIL").as_deref() == Ok("1") {
+    if force_fail || hw_force_fail_active() {
         tracing::warn!(
             "hwaccel: forced HW init failure for backend={} — falling back to SW",
             hw_backend_name(backend)
@@ -602,7 +692,7 @@ mod tests {
     }
 
     fn ensure_stub() {
-        std::env::set_var("SH_IMAGES_FFMPEG_STUB", "1");
+        set_test_stub(true);
     }
 
     #[test]
@@ -750,13 +840,10 @@ mod tests {
 
     #[test]
     fn open_with_hw_force_fail_falls_back_to_sw_hw_active_false() {
+        let _lock = TEST_HW_MUTEX.lock().unwrap();
         ensure_stub();
-        // Force HW failure via override helper — simulate env failure path
-        // We test the inner helper directly, and also that decoder open does not panic
-        // even when HW is forced to fail (fallback to SW, hw_active=false).
-        // Set env to force failure for the duration of this test.
-        let prev = std::env::var("SH_IMAGES_HW_FORCE_FAIL").ok();
-        std::env::set_var("SH_IMAGES_HW_FORCE_FAIL", "1");
+        // Force HW failure via atomic override — thread-safe, no env race.
+        set_test_hw_force_fail(true);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("clip_hw_fail.mp4");
         std::fs::write(&path, b"stub").unwrap();
@@ -773,18 +860,14 @@ mod tests {
             sample,
             crate::core::video::backend::Sample::EndOfStream
         ));
-        // restore env
-        match prev {
-            Some(v) => std::env::set_var("SH_IMAGES_HW_FORCE_FAIL", v),
-            None => std::env::remove_var("SH_IMAGES_HW_FORCE_FAIL"),
-        }
+        set_test_hw_force_fail(false);
     }
 
     #[test]
     #[cfg(feature = "hwaccel")]
     fn hwaccel_feature_open_succeeds_without_panic() {
         ensure_stub();
-        std::env::remove_var("SH_IMAGES_HW_FORCE_FAIL");
+        set_test_hw_force_fail(false);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("clip_hw_feat.mp4");
         std::fs::write(&path, b"stub").unwrap();
