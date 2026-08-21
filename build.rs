@@ -157,7 +157,7 @@ fn encode_ico(rgba_bufs: &[(u32, Vec<u8>)]) -> Vec<u8> {
 
         // BGRA pixel data (swizzle R↔B desde RGBA)
         let mut bgra = Vec::with_capacity(rgba.len());
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0 {
             let (r, g, b, a) = (px[0], px[1], px[2], px[3]);
             bgra.extend_from_slice(&[b, g, r, a]);
         }
