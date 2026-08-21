@@ -115,6 +115,47 @@ pub fn av_rescale_q_saturating(a: i64, bq_num: i32, bq_den: i32, cq_num: i32, cq
 }
 
 // ---------------------------------------------------------------------------
+// Container metadata extraction — pure, fully testable without FFmpeg runtime.
+// Used by the real `#[cfg(feature = "video")]` open path (REQ-RD-006).
+// ---------------------------------------------------------------------------
+
+/// Container duration in AV_TIME_BASE microseconds → `Duration`.
+///
+/// FFmpeg reports unknown duration as `AV_NOPTS_VALUE` or `0`; both map to
+/// `None` so callers can fall back to stream duration.
+pub fn duration_from_av_micros(micros: i64) -> Option<Duration> {
+    if micros <= 0 {
+        None
+    } else {
+        Some(Duration::from_micros(micros as u64))
+    }
+}
+
+/// Stream duration in time-base ticks → `Duration` via saturating rescale.
+///
+/// Rejects NOPTS/negative ticks and degenerate time bases (num/den ≤ 0)
+/// instead of dividing by zero (REQ-RD-006 "unknown polled" scenario).
+pub fn duration_from_stream_ticks(ticks: i64, tb_num: i32, tb_den: i32) -> Option<Duration> {
+    if ticks <= 0 || tb_num <= 0 || tb_den <= 0 {
+        return None;
+    }
+    let micros = av_rescale_q_saturating(ticks, tb_num, tb_den, 1, AV_TIME_BASE as i32);
+    duration_from_av_micros(micros)
+}
+
+/// Frame rate rational (`avg_frame_rate` / `r_frame_rate`) → fps.
+///
+/// FFmpeg encodes "unknown rate" as `0/0`; a zero denominator or non-positive
+/// numerator is likewise unusable → `None`.
+pub fn fps_from_rational(numerator: i32, denominator: i32) -> Option<f32> {
+    if numerator > 0 && denominator > 0 {
+        Some(numerator as f32 / denominator as f32)
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
 // sws helpers — YUV → RGBA conversion (pure, testable).
 // ---------------------------------------------------------------------------
 
@@ -310,6 +351,25 @@ pub fn check_codec_supported(codec_name: &str) -> Result<()> {
 // integration will replace internals but keep this trait boundary).
 // ---------------------------------------------------------------------------
 
+/// Owned FFmpeg handles of a successfully opened container.
+///
+/// Field order IS drop order (`REQ-RD-007`): the video decoder context is
+/// freed BEFORE the demuxer input. Drop chain of `v_decoder`:
+/// `Video → Opened (avcodec_close) → Context (avcodec_free_context)`.
+#[cfg(feature = "video")]
+struct RealOpen {
+    /// Owned, opened H.264/H.265 video decoder (`ffmpeg-next` RAII).
+    v_decoder: ffmpeg_next::codec::decoder::video::Video,
+    /// Index of the best video stream inside `ictx`.
+    #[allow(dead_code)] // consumed by PR2 next_sample packet routing
+    v_stream_index: usize,
+    /// Time base of that stream — PTS math source of truth (PR2).
+    #[allow(dead_code)]
+    v_time_base: ffmpeg_next::util::rational::Rational,
+    /// Owned demuxer context — kept alive for PR2/PR3 packet reads.
+    ictx: ffmpeg_next::format::context::Input,
+}
+
 pub struct FfmpegDecoder {
     info: VideoInfo,
     output_size: (u32, u32),
@@ -320,6 +380,10 @@ pub struct FfmpegDecoder {
     duration: Option<Duration>,
     #[allow(dead_code)]
     hw_ctx: Option<HwContext>,
+    /// Real FFI open state. `None` while running the test-stub path
+    /// (feature off, or explicit stub override without DLLs).
+    #[cfg(feature = "video")]
+    real: Option<RealOpen>,
 }
 
 impl FfmpegDecoder {
@@ -337,12 +401,12 @@ impl FfmpegDecoder {
         audio_rate: u32,
         video_only: bool,
     ) -> Result<Self> {
+        let allow_stub = TEST_FFMPEG_STUB.load(Ordering::SeqCst)
+            || std::env::var("SH_IMAGES_FFMPEG_STUB").is_ok();
         if !is_available() && cfg!(windows) {
             // On Windows without DLLs, return Media without panic (REQ-FF-011).
             // On CI without windows DLLs, allow stub open for testing via
             // `SH_IMAGES_FFMPEG_STUB` env or test atomic.
-            let allow_stub = TEST_FFMPEG_STUB.load(Ordering::SeqCst)
-                || std::env::var("SH_IMAGES_FFMPEG_STUB").is_ok();
             if !allow_stub {
                 return Err(ShImagesError::Media(format!(
                     "FFmpeg DLLs missing — cannot open {}",
@@ -357,7 +421,6 @@ impl FfmpegDecoder {
             )));
         }
         // Minimal header probe: check file extension/codec hint for REQ-FF-001.
-        // Real implementation will call avformat_open_input / find_stream_info.
         let ext = path
             .extension()
             .and_then(|s| s.to_str())
@@ -372,6 +435,15 @@ impl FfmpegDecoder {
 
         // Validate file header: empty/corrupt/PNG masquerade must fail with Media (REQ-FF-011, flujo 14).
         validate_file_header(path)?;
+
+        // Real FFI open (REQ-RD-001): only when the `video` feature is on AND
+        // DLLs probe available AND no explicit test-stub override. Everything
+        // else keeps the stub path below so `cargo test` passes without dev
+        // libs (REQ-RD-008).
+        #[cfg(feature = "video")]
+        if is_available() && !allow_stub {
+            return Self::open_real(path, output_size, audio_rate, video_only);
+        }
 
         let fps = Some(30.0);
         // Try HW device init — on failure fallback to SW (REQ-FF-010): log, do not panic.
@@ -398,6 +470,96 @@ impl FfmpegDecoder {
             video_only,
             duration: None,
             hw_ctx,
+            #[cfg(feature = "video")]
+            real: None,
+        })
+    }
+
+    /// Real container open via `ffmpeg-next` (PR1: REQ-RD-001/006/009).
+    ///
+    /// `format::input` runs `avformat_open_input` + `avformat_find_stream_info`
+    /// internally; we then pick the best video stream, reject anything that is
+    /// not H.264/H.265 through `check_codec_supported` BEFORE `avcodec_open2`,
+    /// and populate duration/fps/has_audio from container metadata. Decoding
+    /// itself (`next_sample`) lands in PR2; PR1 proves a REAL open/close with
+    /// owned handles and correct drop order.
+    #[cfg(feature = "video")]
+    fn open_real(
+        path: &Path,
+        output_size: (u32, u32),
+        audio_rate: u32,
+        video_only: bool,
+    ) -> Result<Self> {
+        let ictx = ffmpeg_next::format::input(path)
+            .map_err(|e| ShImagesError::Media(format!("cannot demux {}: {e}", path.display())))?;
+
+        let stream = ictx
+            .streams()
+            .best(ffmpeg_next::media::Type::Video)
+            .ok_or_else(|| ShImagesError::Media("no video stream".to_string()))?;
+
+        // Snapshot stream metadata before ownership moves into the decoder.
+        let v_stream_index = stream.index();
+        let v_time_base = stream.time_base();
+        let avg_fps = stream.avg_frame_rate();
+        let r_fps = stream.rate(); // r_frame_rate — sane fps fallback
+        let container_micros = ictx.duration();
+        let stream_ticks = stream.duration();
+        let has_audio_stream = ictx
+            .streams()
+            .best(ffmpeg_next::media::Type::Audio)
+            .is_some();
+
+        // Codec parameters → codec context → opened video decoder. The typed
+        // wrapper OWNS the AVCodecContext (Video → Opened → Decoder → Context).
+        let ctx = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())
+            .map_err(|e| ShImagesError::Media(format!("cannot read codec parameters: {e}")))?;
+        // REQ-RD-009: reject VP9/others by decoder name BEFORE avcodec_open2.
+        check_codec_supported(ctx.id().name())?;
+        let v_decoder = ctx
+            .decoder()
+            .video()
+            .map_err(|e| ShImagesError::Media(format!("cannot open video decoder: {e}")))?;
+
+        // Source dimensions from codec parameters (REQ-RD-001 "from stream");
+        // fall back to requested output size when the container omits them.
+        let src_w = v_decoder.width();
+        let src_h = v_decoder.height();
+
+        let fps = fps_from_rational(avg_fps.numerator(), avg_fps.denominator())
+            .or_else(|| fps_from_rational(r_fps.numerator(), r_fps.denominator()));
+        let duration = duration_from_av_micros(container_micros).or_else(|| {
+            duration_from_stream_ticks(
+                stream_ticks,
+                v_time_base.numerator(),
+                v_time_base.denominator(),
+            )
+        });
+
+        let info = VideoInfo {
+            width: if src_w > 0 { src_w } else { output_size.0 },
+            height: if src_h > 0 { src_h } else { output_size.1 },
+            duration,
+            fps,
+            has_audio: has_audio_stream && !video_only,
+            container_rotation: 0,
+            can_seek: true,
+            hw_active: false, // SW-only slice; HW accel is a later slice.
+        };
+
+        Ok(Self {
+            info,
+            output_size,
+            audio_rate,
+            video_only,
+            duration,
+            hw_ctx: None,
+            real: Some(RealOpen {
+                v_decoder,
+                v_stream_index,
+                v_time_base,
+                ictx,
+            }),
         })
     }
 }
@@ -430,16 +592,27 @@ impl Decoder for FfmpegDecoder {
     }
 
     fn refresh_duration(&mut self) -> Option<Duration> {
-        // REQ-FF-009: eager via AVFormatContext duration / stream duration.
+        // REQ-FF-009 / REQ-RD-006: known duration wins; otherwise re-query the
+        // container after the index has loaded, then fall back to info.
         if self.duration.is_some() {
             return self.duration;
         }
-        // Try info.duration else AVFormatContext probe (stub returns info).
+        #[cfg(feature = "video")]
+        let requeried: Option<Duration> = self
+            .real
+            .as_ref()
+            .and_then(|r| duration_from_av_micros(r.ictx.duration()));
+        #[cfg(feature = "video")]
+        if requeried.is_some() {
+            self.duration = requeried;
+            self.info.duration = requeried;
+            return requeried;
+        }
         if self.info.duration.is_some() {
             self.duration = self.info.duration;
             return self.duration;
         }
-        // Stub: if file exists, pretend we read index after packets.
+        // Stub: no index to load — stays None without panic.
         self.duration
     }
 }
@@ -695,6 +868,70 @@ mod tests {
         assert!(!probe_dll("nonexistent_sh_images_probe_12345.dll"));
     }
 
+    #[test]
+    fn is_available_stub_toggle_roundtrip() {
+        // PR1 1.2: stub override must flip availability both ways so SW logic
+        // is testable without DLLs (REQ-RD-008). Restore true afterwards — the
+        // rest of this suite relies on ensure_stub().
+        set_test_stub(true);
+        assert!(is_available(), "stub=true must force availability");
+        set_test_stub(false);
+        // In test builds probe_dll_inner never loads libraries (Windows cfg!(test)
+        // guard / non-Windows always-false), so without the stub this is false.
+        assert!(!is_available(), "stub=false must fall back to DLL probe");
+        set_test_stub(true);
+        assert!(is_available());
+    }
+
+    fn write_temp_mp4(name: &str, payload: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        std::fs::write(&path, payload).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn open_empty_file_returns_media_not_panic() {
+        // PR1 2.1 REQ-RD-001: empty file must map to Media before any FFI.
+        ensure_stub();
+        let (_dir, path) = write_temp_mp4("empty.mp4", b"");
+        let err = FfmpegDecoder::open(&path, (640, 480), 48000)
+            .err()
+            .expect("empty file must not open");
+        assert!(matches!(err, ShImagesError::Media(_)));
+        assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn open_png_masquerade_returns_media_not_panic() {
+        // PR1 2.1 REQ-RD-001: PNG bytes renamed .mp4 must be rejected.
+        ensure_stub();
+        let mut png = vec![0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend_from_slice(&[0u8; 64]);
+        let (_dir, path) = write_temp_mp4("fake.mp4", &png);
+        let err = FfmpegDecoder::open(&path, (640, 480), 48000)
+            .err()
+            .expect("PNG masquerade must not open");
+        assert!(matches!(err, ShImagesError::Media(_)));
+        assert!(err.to_string().contains("PNG"), "got: {err}");
+    }
+
+    #[test]
+    fn open_corrupt_header_returns_media_not_panic() {
+        // PR1 2.1 REQ-RD-001: non-ftyp payload must be rejected as corrupt.
+        ensure_stub();
+        let (_dir, path) =
+            write_temp_mp4("corrupt.mp4", b"\x00\x01\x02\x03garbage-not-a-container");
+        let err = FfmpegDecoder::open(&path, (640, 480), 48000)
+            .err()
+            .expect("corrupt container must not open");
+        assert!(matches!(err, ShImagesError::Media(_)));
+        assert!(
+            err.to_string().contains("corrupt") || err.to_string().contains("invalid"),
+            "got: {err}"
+        );
+    }
+
     fn ensure_stub() {
         set_test_stub(true);
     }
@@ -761,6 +998,71 @@ mod tests {
         std::fs::write(&path, b"stub").unwrap();
         let mut dec = FfmpegDecoder::open(&path, (640, 480), 48000).unwrap();
         assert_eq!(dec.refresh_duration(), None);
+    }
+
+    // ---- PR1 REQ-RD-006: container/stream duration + fps extraction ----
+
+    #[test]
+    fn duration_from_av_micros_maps_known_duration() {
+        // Spec: file duration 12.3 s -> Some within 50 ms of true value.
+        let d = duration_from_av_micros(12_300_000).expect("12.3 s must be known");
+        let expected = Duration::from_millis(12_300);
+        assert!(
+            d.abs_diff(expected) < Duration::from_millis(50),
+            "got {d:?}"
+        );
+    }
+
+    #[test]
+    fn duration_from_av_micros_rejects_unknown_and_negative() {
+        // AV_NOPTS_VALUE == i64::MIN means "unknown" -> None.
+        assert_eq!(duration_from_av_micros(AV_NOPTS_VALUE), None);
+        assert_eq!(duration_from_av_micros(0), None);
+        assert_eq!(duration_from_av_micros(-5), None);
+    }
+
+    #[test]
+    fn duration_from_stream_ticks_rescales_via_time_base() {
+        // 900_000 ticks at 1/90000 s == 10 s.
+        let d = duration_from_stream_ticks(900_000, 1, 90_000).expect("ticks must be known");
+        assert!(
+            d.abs_diff(Duration::from_secs(10)) < Duration::from_millis(50),
+            "got {d:?}"
+        );
+        // Container unknown (-1 micros) falls back to stream ticks path.
+        let d2 = duration_from_av_micros(-1)
+            .or_else(|| duration_from_stream_ticks(450_000, 1, 90_000))
+            .expect("stream fallback must be known");
+        assert!(
+            d2.abs_diff(Duration::from_secs(5)) < Duration::from_millis(50),
+            "got {d2:?}"
+        );
+    }
+
+    #[test]
+    fn duration_from_stream_ticks_rejects_invalid_inputs() {
+        assert_eq!(duration_from_stream_ticks(-1, 1, 90_000), None); // NOPTS ticks
+        assert_eq!(duration_from_stream_ticks(900_000, 0, 0), None); // degenerate time base
+        assert_eq!(duration_from_stream_ticks(0, 1, 90_000), None);
+        assert_eq!(duration_from_stream_ticks(100, 1, 0), None); // den 0 would divide-by-zero
+    }
+
+    #[test]
+    fn fps_from_rational_maps_avg_frame_rate() {
+        let fps = fps_from_rational(30, 1).expect("30/1 must yield fps");
+        assert!((fps - 30.0).abs() < f32::EPSILON);
+
+        // NTSC 30000/1001 ≈ 29.97 — non-trivial rational still valid.
+        let ntsc = fps_from_rational(30_000, 1_001).expect("ntsc rate must yield fps");
+        assert!((ntsc - 29.97).abs() < 0.01, "got {ntsc}");
+    }
+
+    #[test]
+    fn fps_from_rational_rejects_degenerate_rates() {
+        // 0/0 (unknown avg_frame_rate), zero denominator, negative numerator.
+        assert_eq!(fps_from_rational(0, 0), None);
+        assert_eq!(fps_from_rational(25, 0), None);
+        assert_eq!(fps_from_rational(-1, 30), None);
     }
 
     // ---- REQ-FF-010: HW accel backend selection + fallback ----
