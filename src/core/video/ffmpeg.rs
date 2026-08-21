@@ -233,9 +233,8 @@ pub fn is_available() -> bool {
 // ---------------------------------------------------------------------------
 
 fn validate_file_header(path: &Path) -> Result<()> {
-    let metadata = std::fs::metadata(path).map_err(|e| {
-        ShImagesError::Media(format!("cannot stat {}: {e}", path.display()))
-    })?;
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| ShImagesError::Media(format!("cannot stat {}: {e}", path.display())))?;
     if metadata.len() == 0 {
         return Err(ShImagesError::Media(format!(
             "empty file: {}",
@@ -243,9 +242,8 @@ fn validate_file_header(path: &Path) -> Result<()> {
         )));
     }
     // Read first up to 512 bytes for signature check
-    let mut file = std::fs::File::open(path).map_err(|e| {
-        ShImagesError::Media(format!("cannot open {}: {e}", path.display()))
-    })?;
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| ShImagesError::Media(format!("cannot open {}: {e}", path.display())))?;
     let to_read = std::cmp::min(512, metadata.len() as usize);
     let mut buf = vec![0u8; to_read];
     {
