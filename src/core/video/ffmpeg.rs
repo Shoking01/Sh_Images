@@ -853,8 +853,8 @@ impl FfmpegDecoder {
         }
         // Pre-sized destination (src rate/layout already validated above):
         // swr caps at this capacity, so ratio + margin prevents truncation.
-        let capacity = decoded.samples().saturating_mul(usize::from(audio_rate))
-            / usize::from(src_rate)
+        let capacity = decoded.samples().saturating_mul(audio_rate as usize)
+            / (src_rate as usize).max(1)
             + RESAMPLE_CAPACITY_MARGIN;
         let mut out = ffmpeg_next::frame::audio::Audio::new(
             SampleFmt::F32(SampleType::Planar),
@@ -925,7 +925,8 @@ impl FfmpegDecoder {
         decoded: &ffmpeg_next::frame::video::Video,
         output_size: (u32, u32),
     ) -> Result<Sample> {
-        use ffmpeg_next::util::{format::pixel::Pixel, scaling};
+        use ffmpeg_next::software::scaling;
+        use ffmpeg_next::util::format::pixel::Pixel;
 
         let src_w = decoded.width();
         let src_h = decoded.height();
