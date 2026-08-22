@@ -17,6 +17,8 @@ use once_cell::sync::Lazy;
 
 use super::backend::{Decoder, Sample};
 use super::ring::should_renegotiate;
+#[cfg(feature = "video")]
+use super::ring::VideoFrame;
 use super::VideoInfo;
 use crate::utils::errors::{Result, ShImagesError};
 
@@ -213,6 +215,28 @@ pub fn yuv420p_to_rgba(
     Ok(rgba)
 }
 
+/// Extract tightly-packed RGBA rows from an FFmpeg frame plane.
+///
+/// libswscale output buffers are line-aligned: `stride` (linesize) may exceed
+/// `width * 4`. This copies exactly `width * height * 4` bytes row by row,
+/// dropping alignment padding. Defensive by contract: truncated plane data
+/// leaves zero rows instead of panicking, and the output size invariant holds
+/// either way (`REQ-RD-002`: `pixels.len() == w*h*4`).
+pub fn copy_rgba_rows(src: &[u8], stride: usize, width: usize, height: usize) -> Vec<u8> {
+    let mut out = vec![0u8; width.saturating_mul(height) * 4];
+    let row = width * 4;
+    if stride >= row && !out.is_empty() {
+        for y in 0..height {
+            let start = y * stride;
+            if start + row > src.len() {
+                break; // truncated source: remaining rows stay zeroed
+            }
+            out[y * row..(y + 1) * row].copy_from_slice(&src[start..start + row]);
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // DLL probe — runtime availability check.
 // ---------------------------------------------------------------------------
@@ -351,22 +375,47 @@ pub fn check_codec_supported(codec_name: &str) -> Result<()> {
 // integration will replace internals but keep this trait boundary).
 // ---------------------------------------------------------------------------
 
+/// Definition of one sws scaling context: its fixed input/output geometry.
+///
+/// libswscale contexts are pinned to exact format/size pairs (`run()` rejects
+/// any mismatch with `InputChanged`), so `video_sample` rebuilds the context
+/// whenever any component of this definition changes — including output
+/// resizes requested through `set_output_size`.
+#[cfg(feature = "video")]
+struct ScalerDef {
+    ctx: ffmpeg_next::software::scaling::Context,
+    src_fmt: ffmpeg_next::util::format::pixel::Pixel,
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+}
+
 /// Owned FFmpeg handles of a successfully opened container.
 ///
-/// Field order IS drop order (`REQ-RD-007`): the video decoder context is
-/// freed BEFORE the demuxer input. Drop chain of `v_decoder`:
-/// `Video → Opened (avcodec_close) → Context (avcodec_free_context)`.
+/// Field order IS drop order (`REQ-RD-007`): the sws scaling context is freed
+/// FIRST, then the video decoder context (`Video → Opened(avcodec_close) →
+/// Context(avcodec_free_context)`), and the demuxer input drops LAST.
 #[cfg(feature = "video")]
 struct RealOpen {
+    /// YUV-family → RGBA converter (`sws_getContext`). Created lazily on the
+    /// first decoded frame and rebuilt whenever its definition changes;
+    /// declared first so it is released before decoder/demuxer handles.
+    scaler: Option<ScalerDef>,
+    /// Reusable RGBA destination buffer for `sws_scale`; re-allocated only
+    /// when the scaler definition changes.
+    v_out: ffmpeg_next::frame::video::Video,
     /// Owned, opened H.264/H.265 video decoder (`ffmpeg-next` RAII).
     v_decoder: ffmpeg_next::codec::decoder::video::Video,
-    /// Index of the best video stream inside `ictx`.
-    #[allow(dead_code)] // consumed by PR2 next_sample packet routing
+    /// Index of the best video stream inside `ictx` — packet routing filter.
     v_stream_index: usize,
-    /// Time base of that stream — PTS math source of truth (PR2).
-    #[allow(dead_code)]
+    /// Time base of that stream — PTS math source of truth.
     v_time_base: ffmpeg_next::util::rational::Rational,
-    /// Owned demuxer context — kept alive for PR2/PR3 packet reads.
+    /// Decoder name captured at open time for error messages.
+    codec_name: String,
+    /// True after `send_eof` entered drain mode; afterwards only receives run.
+    draining: bool,
+    /// Owned demuxer context — kept alive for packet reads; dropped last.
     ictx: ffmpeg_next::format::context::Input,
 }
 
@@ -516,6 +565,7 @@ impl FfmpegDecoder {
             .map_err(|e| ShImagesError::Media(format!("cannot read codec parameters: {e}")))?;
         // REQ-RD-009: reject VP9/others by decoder name BEFORE avcodec_open2.
         check_codec_supported(ctx.id().name())?;
+        let codec_name = ctx.id().name().to_string();
         let v_decoder = ctx
             .decoder()
             .video()
@@ -555,12 +605,167 @@ impl FfmpegDecoder {
             duration,
             hw_ctx: None,
             real: Some(RealOpen {
+                scaler: None,
+                v_out: ffmpeg_next::frame::video::Video::empty(),
                 v_decoder,
                 v_stream_index,
                 v_time_base,
+                codec_name,
+                draining: false,
                 ictx,
             }),
         })
+    }
+
+    /// True if `err` is `AVERROR(EAGAIN)` — decoder wants more input.
+    #[cfg(feature = "video")]
+    fn is_av_eagain(err: &ffmpeg_next::util::error::Error) -> bool {
+        matches!(
+            err,
+            ffmpeg_next::util::error::Error::Other { errno }
+                if *errno == ffmpeg_next::util::error::EAGAIN
+        )
+    }
+
+    /// Real decode loop (PR2, REQ-RD-002): receive frames until EAGAIN, then
+    /// read one packet via `av_read_frame` and feed the video decoder; on
+    /// packet EOF enter drain mode (`send_eof`) and flush buffered frames.
+    ///
+    /// One `Packet` is reused across reads (FFmpeg 7 `av_read_frame` unrefs
+    /// the incoming packet before filling it); the decoded-frame buffer is
+    /// recreated per call while the RGBA output buffer is reused — accepted
+    /// tradeoff documented in apply-progress.
+    #[cfg(feature = "video")]
+    fn next_sample_real(&mut self) -> Result<Sample> {
+        use ffmpeg_next::{
+            frame::video::Video as DecodedFrame, packet::Packet, util::error::Error as AvError,
+        };
+
+        let out_size = self.output_size;
+        let Some(real) = self.real.as_mut() else {
+            return Ok(Sample::EndOfStream);
+        };
+        let mut decoded = DecodedFrame::empty();
+        let mut packet = Packet::empty();
+        loop {
+            match real.v_decoder.receive_frame(&mut decoded) {
+                Ok(()) => return Self::video_sample(real, &decoded, out_size),
+                Err(err) if Self::is_av_eagain(&err) => {}
+                Err(AvError::Eof) => return Ok(Sample::EndOfStream),
+                Err(err) => return Err(map_av_error(i32::from(err), &real.codec_name)),
+            }
+            if real.draining {
+                // Drain mode and still EAGAIN: nothing left anywhere.
+                return Ok(Sample::EndOfStream);
+            }
+            match packet.read(&mut real.ictx) {
+                Ok(()) => {
+                    if packet.stream() == real.v_stream_index {
+                        real.v_decoder
+                            .send_packet(&packet)
+                            .map_err(|e| map_av_error(i32::from(e), &real.codec_name))?;
+                    }
+                    // Non-video packets are consumed and skipped here;
+                    // PR3 routes audio packets to its own decoder.
+                }
+                Err(AvError::Eof) => {
+                    // Packets exhausted: flush the decoder, then keep
+                    // receiving buffered frames until it reports EOF.
+                    let _ = real.v_decoder.send_eof();
+                    real.draining = true;
+                }
+                Err(err) => return Err(map_av_error(i32::from(err), &real.codec_name)),
+            }
+        }
+    }
+
+    /// Convert one decoded frame into RGBA `Sample::Video` (REQ-RD-002).
+    ///
+    /// Output geometry is the requested output size capped at 1920x1080 — at
+    /// that cap pixels ≤ 8.3 MB per frame, well inside the FrameRing 64 MB
+    /// budget asserted by `bench_gate_ring_capacity_stays_under_64mb`. The
+    /// sws context is rebuilt whenever the source definition (format/size)
+    /// changes, which also covers future `set_output_size` renegotiation.
+    #[cfg(feature = "video")]
+    fn video_sample(
+        real: &mut RealOpen,
+        decoded: &ffmpeg_next::frame::video::Video,
+        output_size: (u32, u32),
+    ) -> Result<Sample> {
+        use ffmpeg_next::util::{format::pixel::Pixel, scaling};
+
+        let src_w = decoded.width();
+        let src_h = decoded.height();
+        if src_w == 0 || src_h == 0 {
+            return Err(ShImagesError::Media(
+                "decoded frame has zero dimensions".to_string(),
+            ));
+        }
+        let dst_w = output_size.0.min(1920).max(1);
+        let dst_h = output_size.1.min(1080).max(1);
+
+        let src_fmt = decoded.format();
+        let stale = match &real.scaler {
+            Some(s) => {
+                s.src_fmt != src_fmt
+                    || s.src_w != src_w
+                    || s.src_h != src_h
+                    || s.dst_w != dst_w
+                    || s.dst_h != dst_h
+            }
+            None => true,
+        };
+        if stale {
+            let ctx = scaling::Context::get(
+                src_fmt,
+                src_w,
+                src_h,
+                Pixel::RGBA,
+                dst_w,
+                dst_h,
+                scaling::Flags::BILINEAR,
+            )
+            .map_err(|e| ShImagesError::Media(format!("cannot create scaler: {e}")))?;
+            real.scaler = Some(ScalerDef {
+                ctx,
+                src_fmt,
+                src_w,
+                src_h,
+                dst_w,
+                dst_h,
+            });
+            real.v_out = ffmpeg_next::frame::video::Video::empty();
+        }
+        let Some(scaler) = real.scaler.as_mut() else {
+            return Err(ShImagesError::Media(
+                "scaler missing after creation".to_string(),
+            ));
+        };
+        scaler
+            .ctx
+            .run(decoded, &mut real.v_out)
+            .map_err(|e| ShImagesError::Media(format!("sws_scale failed: {e}")))?;
+
+        let stride = real.v_out.stride(0);
+        let w = real.v_out.width() as usize;
+        let h = real.v_out.height() as usize;
+        let pixels = copy_rgba_rows(real.v_out.data(0), stride, w, h);
+
+        // REQ-RD-004 hooks (full fallback matrix lands in PR3 task 5.1):
+        // NOPTS → best_effort_timestamp → ZERO.
+        let pts = pts_to_duration(
+            decoded.pts().unwrap_or(AV_NOPTS_VALUE),
+            real.v_time_base.numerator(),
+            real.v_time_base.denominator(),
+            decoded.timestamp(),
+            None,
+        );
+        Ok(Sample::Video(VideoFrame {
+            pts,
+            width: w as u32,
+            height: h as u32,
+            pixels,
+        }))
     }
 }
 
@@ -570,8 +775,12 @@ impl Decoder for FfmpegDecoder {
     }
 
     fn next_sample(&mut self) -> Result<Sample> {
-        // Slice1 stub: no real packets yet — return EndOfStream after open.
-        // Real impl loops av_read_frame → send_packet/recv_frame → sws/swr.
+        // Real decode loop when a container was opened via FFI (PR2);
+        // otherwise the stub contract stands: EndOfStream after open.
+        #[cfg(feature = "video")]
+        if self.real.is_some() {
+            return self.next_sample_real();
+        }
         Ok(Sample::EndOfStream)
     }
 
@@ -586,7 +795,9 @@ impl Decoder for FfmpegDecoder {
         // REQ-FF-003: 25% hysteresis — only renegotiate if significant.
         if should_renegotiate(self.output_size, (width, height)) {
             self.output_size = (width, height);
-            // real: sws_getContext re-create for AV_PIX_FMT_RGBA
+            // The sws context is rebuilt lazily by `video_sample` on the next
+            // decoded frame, whose staleness check compares the stored output
+            // geometry against the new request.
         }
         Ok(())
     }
@@ -870,6 +1081,11 @@ mod tests {
 
     #[test]
     fn is_available_stub_toggle_roundtrip() {
+        // PR2 W2 fix (verify-report-pr1): this is the only set_test_stub(false)
+        // site and it mutates the process-global TEST_FFMPEG_STUB atomic, so it
+        // must hold the same guard as every other global-state test or a
+        // parallel stub-dependent test can observe the false window.
+        let _guard = TEST_HW_MUTEX.lock().unwrap();
         // PR1 1.2: stub override must flip availability both ways so SW logic
         // is testable without DLLs (REQ-RD-008). Restore true afterwards — the
         // rest of this suite relies on ensure_stub().
@@ -1265,6 +1481,70 @@ mod tests {
     }
 
     // ---- 5.3 bench gates: Ring ≤64MB, drift <50ms ----
+
+    // ---- PR2 3.1 [RED]: RGBA pixels.len() == w*h*4 (REQ-RD-002) ----
+
+    #[test]
+    fn rgba_rows_len_is_wh4_with_padded_stride() {
+        // Real sws_scale output buffers are line-aligned: stride may exceed
+        // width*4. Extraction must strip the padding and still yield exactly
+        // w*h*4 bytes.
+        let (w, h, stride) = (3usize, 2usize, 16usize);
+        let data = vec![7u8; stride * h];
+        let px = copy_rgba_rows(&data, stride, w, h);
+        assert_eq!(px.len(), w * h * 4);
+        assert_eq!(&px[0..4], &[7, 7, 7, 7], "first pixel must be copied");
+        assert_eq!(&px[(w - 1) * 4..w * 4], &[7, 7, 7, 7], "last row-0 pixel");
+        // Row 1 must come from row 1 of the padded source, not padding bytes.
+        assert_eq!(&px[h * w * 4 - 4..h * w * 4], &[7, 7, 7, 7]);
+    }
+
+    #[test]
+    fn rgba_rows_len_is_wh4_with_tight_stride() {
+        let (w, h, stride) = (4usize, 3usize, 16usize); // stride == w*4 exactly
+        let data = vec![9u8; stride * h];
+        let px = copy_rgba_rows(&data, stride, w, h);
+        assert_eq!(px.len(), w * h * 4);
+        assert!(px.iter().all(|&b| b == 9));
+    }
+
+    #[test]
+    fn rgba_rows_truncated_source_never_panics_and_stays_wh4() {
+        // Defensive contract: malformed/short plane data must not panic and
+        // must keep the w*h*4 size invariant so FrameRing budgets hold.
+        let (w, h, stride) = (4usize, 4usize, 16usize);
+        let data = vec![1u8; 10];
+        let px = copy_rgba_rows(&data, stride, w, h);
+        assert_eq!(px.len(), w * h * 4);
+    }
+
+    #[test]
+    #[cfg(feature = "video")]
+    #[ignore = "requires FFmpeg DLLs + H264 fixture (PR3 CI lane, tasks 6.x); compiles under --features video only on this machine"]
+    fn next_sample_real_decode_pixels_len_equals_wh4() {
+        // REQ-RD-002 "Produces RGBA": decoded Sample::Video pixels length must
+        // equal width*height*4 with pts >= ZERO. Gated behind is_available()
+        // early-return per REQ-RD-008 so machines without DLLs skip cleanly;
+        // the <100 KB fixture lands in PR3 task 6.1.
+        if !is_available() {
+            return;
+        }
+        let fixture = std::path::Path::new("tests/fixtures/h264_64x64.mp4");
+        if !fixture.exists() {
+            return;
+        }
+        let mut dec = FfmpegDecoder::open(fixture, (64, 64), 48_000).expect("fixture must open");
+        match dec.next_sample().expect("decode must succeed") {
+            Sample::Video(frame) => {
+                assert_eq!(
+                    frame.pixels.len(),
+                    (frame.width * frame.height * 4) as usize
+                );
+                assert!(frame.pts >= Duration::ZERO, "pts must be monotonic");
+            }
+            other => panic!("expected Video sample, got {other:?}"),
+        }
+    }
 
     #[test]
     fn bench_gate_ring_capacity_stays_under_64mb() {
