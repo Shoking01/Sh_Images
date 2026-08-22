@@ -56,7 +56,14 @@ hwaccel = ["video"]
 once_cell = "1.19"
 # FFmpeg 7.x dynamic LGPL — Slice1 SW decode. Optional so `cargo test` without
 # FFmpeg dev libs still passes; `cargo test --features video` probes real DLLs.
-ffmpeg-next = { version = "7", optional = true }
+# Minimal feature set: default pulls avfilter+avdevice which we never use and
+# whose .pc files would be required at build time (CI video-decode failure).
+ffmpeg-next = { version = "7", optional = true, default-features = false, features = [
+    "codec",
+    "format",
+    "software-resampling",
+    "software-scaling",
+] }
 # GUI — eframe/egui: framework immediate-mode nativo, fijado por Plan.md.
 # NOTA: el backend por defecto (wgpu) produce un binario >20MB. Ver ADR-001.
 eframe = "0.35"

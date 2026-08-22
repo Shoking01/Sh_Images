@@ -162,6 +162,12 @@ mod tests {
     #[test]
     #[cfg(not(windows))]
     fn unsupported_platform_reports_unavailable() {
+        // The CI video lane sets SH_IMAGES_FFMPEG_REAL=1, which by design
+        // forces availability so real decode runs without a dlopen probe.
+        // Asserting false there would contradict the explicit override.
+        if std::env::var("SH_IMAGES_FFMPEG_REAL").as_deref() == Ok("1") {
+            return;
+        }
         assert!(!is_available());
     }
 

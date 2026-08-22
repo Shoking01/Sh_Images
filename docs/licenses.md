@@ -31,6 +31,14 @@ with **dynamic LGPL** linking.
   the build if `Cargo.toml` enables `ffmpeg-next/static`, if `Files.wxs` does
   not reference the DLLs, or if `LICENSES/FFMPEG_LGPL.txt` is missing.
 
+### Building with the `video` feature
+
+End users never need FFmpeg SDKs (the MSI ships the runtime DLLs), but
+building or testing `--features video` requires FFmpeg **development
+libraries** + `pkg-config` (`libavcodec-dev libavformat-dev libavutil-dev
+libswscale-dev libswresample-dev` on Debian/Ubuntu; Homebrew `ffmpeg` on
+macOS). CI runs this lane as the `video-decode` job in `.github/workflows/ci.yml`.
+
 ### Replacing FFmpeg
 
 Because linking is dynamic, you may replace the bundled DLLs/so/dylibs with
