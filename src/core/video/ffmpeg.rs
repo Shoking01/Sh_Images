@@ -750,10 +750,9 @@ impl FfmpegDecoder {
             // drained; without one the flag latches true and `Sample::Audio`
             // is structurally suppressed (REQ-RD-003).
             let pulled = if has_audio && !real.a_drained {
-                match real.a_decoder.as_mut() {
-                    Some(a_dec) => Some(a_dec.receive_frame(&mut decoded_a)),
-                    None => None,
-                }
+                real.a_decoder
+                    .as_mut()
+                    .map(|a_dec| a_dec.receive_frame(&mut decoded_a))
             } else {
                 None
             };
@@ -935,8 +934,8 @@ impl FfmpegDecoder {
                 "decoded frame has zero dimensions".to_string(),
             ));
         }
-        let dst_w = output_size.0.min(1920).max(1);
-        let dst_h = output_size.1.min(1080).max(1);
+        let dst_w = output_size.0.clamp(1, 1920);
+        let dst_h = output_size.1.clamp(1, 1080);
 
         let src_fmt = decoded.format();
         let stale = match &real.scaler {
