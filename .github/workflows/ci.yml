@@ -68,6 +68,31 @@ jobs:
           fi
           echo "LGPL gate passed."
 
+  # PR3: compile AND run cfg(video) code. Ubuntu-only lane — apt ships the
+  # libav* dev libs ffmpeg-sys-next probes via pkg-config. Second step sets
+  # SH_IMAGES_FFMPEG_REAL=1 so is_available() trusts the linked dev libs and
+  # --include-ignored executes the real-decode tests against the committed
+  # <100KB fixture. Default cargo test stays feature-less; LGPL gate untouched.
+  video-decode:
+    name: video (--features video)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install FFmpeg dev libs (libav*)
+        run: sudo apt-get update && sudo apt-get install -y libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev pkg-config
+      - run: |
+          cargo test --features video
+          cargo clippy --all-targets --features video -- -D warnings
+      - name: Real decode tests (linked dev libs + committed fixture)
+        env:
+          SH_IMAGES_FFMPEG_REAL: "1"
+        run: cargo test --features video -- --include-ignored
+
   # La MSRV declarada en Cargo.toml no se verificaba en ningún sitio. Un backend
   # de medios es exactamente el tipo de dependencia que la sube sin avisar.
   msrv:

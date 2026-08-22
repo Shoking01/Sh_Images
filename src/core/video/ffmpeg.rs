@@ -157,6 +157,18 @@ pub fn fps_from_rational(numerator: i32, denominator: i32) -> Option<f32> {
     }
 }
 
+/// Clamp a seek target to the container duration and convert it to
+/// AV_TIME_BASE microseconds (`REQ-RD-005`: never seek past EOF). Saturating;
+/// feeds `Input::seek(micros, ..micros)` (BACKWARD semantics).
+pub fn clamp_seek_micros(target: Duration, container: Option<Duration>) -> i64 {
+    let effective = match container {
+        Some(d) if d > Duration::ZERO => target.min(d),
+        _ => target,
+    };
+    let micros = effective.as_micros().min(i64::MAX as u128);
+    micros as i64
+}
+
 // ---------------------------------------------------------------------------
 // sws helpers — YUV → RGBA conversion (pure, testable).
 // ---------------------------------------------------------------------------
@@ -213,6 +225,22 @@ pub fn yuv420p_to_rgba(
         }
     }
     Ok(rgba)
+}
+
+/// Extra samples added to every resampler output allocation so swr's filter
+/// delay never truncates a conversion (`REQ-RD-003`).
+pub const RESAMPLE_CAPACITY_MARGIN: usize = 256;
+
+/// Interleave planar stereo f32 planes into one L R L R buffer — the last hop
+/// before `Sample::Audio` emission. Defensive: mismatched lengths pair
+/// strictly (longer plane's tail dropped), keeping `len == 2 * pairs`.
+pub fn interleave_stereo_f32(left: &[f32], right: &[f32]) -> Vec<f32> {
+    let mut out = Vec::with_capacity(left.len().saturating_mul(2));
+    for (l, r) in left.iter().zip(right.iter()) {
+        out.push(*l);
+        out.push(*r);
+    }
+    out
 }
 
 /// Extract tightly-packed RGBA rows from an FFmpeg frame plane.
@@ -286,12 +314,19 @@ static FFMPEG_AVAILABLE: Lazy<bool> = Lazy::new(|| {
 
 /// True if FFmpeg DLLs are present and loadable.
 ///
-/// In tests, `SH_IMAGES_FFMPEG_STUB=1` or `set_test_stub(true)` forces true to exercise SW logic without DLLs.
+/// Test overrides: `SH_IMAGES_FFMPEG_STUB=1` / `set_test_stub(true)` force
+/// true for stub-path tests. `SH_IMAGES_FFMPEG_REAL=1` also reports true —
+/// under `--features video` the binary links libav* directly, so the Linux CI
+/// lane sets it to run real decode without a dlopen probe. Unlike STUB it
+/// does NOT divert `open()` away from the real decoder path.
 pub fn is_available() -> bool {
     if TEST_FFMPEG_STUB.load(Ordering::SeqCst) {
         return true;
     }
     if std::env::var("SH_IMAGES_FFMPEG_STUB").is_ok() {
+        return true;
+    }
+    if std::env::var("SH_IMAGES_FFMPEG_REAL").as_deref() == Ok("1") {
         return true;
     }
     *FFMPEG_AVAILABLE
@@ -391,32 +426,64 @@ struct ScalerDef {
     dst_h: u32,
 }
 
+/// One swr resampling context definition, rebuilt on input change (mirrors
+/// `ScalerDef`). Output policy (`REQ-RD-003`, open question resolved): ALWAYS
+/// resample to stereo planar FLT at the device rate — swr downmixes mono/5.1
+/// natively; [`interleave_stereo_f32`] does the final interleaving hop.
+#[cfg(feature = "video")]
+struct ResamplerDef {
+    ctx: ffmpeg_next::software::resampling::Context,
+    src_fmt: ffmpeg_next::util::format::sample::Sample,
+    src_layout: ffmpeg_next::ChannelLayout,
+    src_rate: u32,
+}
+
 /// Owned FFmpeg handles of a successfully opened container.
 ///
-/// Field order IS drop order (`REQ-RD-007`): the sws scaling context is freed
-/// FIRST, then the video decoder context (`Video → Opened(avcodec_close) →
-/// Context(avcodec_free_context)`), and the demuxer input drops LAST.
+/// Field order IS drop order (`REQ-RD-007`): the sws scaling and swr
+/// resampling contexts free FIRST, then the codec chain (`Video`/`Audio` →
+/// `Opened(avcodec_close)` → `Context(avcodec_free_context)`), and the
+/// demuxer input drops LAST.
 #[cfg(feature = "video")]
 struct RealOpen {
-    /// YUV-family → RGBA converter (`sws_getContext`). Created lazily on the
-    /// first decoded frame and rebuilt whenever its definition changes;
-    /// declared first so it is released before decoder/demuxer handles.
+    /// YUV→RGBA sws context; declared first so it frees before the decoders.
     scaler: Option<ScalerDef>,
-    /// Reusable RGBA destination buffer for `sws_scale`; re-allocated only
-    /// when the scaler definition changes.
+    /// Any-layout → stereo planar FLT swr context; freed with the scaler
+    /// before the codec chain (`REQ-RD-007` drop contract).
+    resampler: Option<ResamplerDef>,
+    /// Reusable RGBA destination buffer for `sws_scale`.
     v_out: ffmpeg_next::frame::video::Video,
     /// Owned, opened H.264/H.265 video decoder (`ffmpeg-next` RAII).
     v_decoder: ffmpeg_next::codec::decoder::video::Video,
-    /// Index of the best video stream inside `ictx` — packet routing filter.
+    /// Owned, opened AAC/MP3 audio decoder; `None` (no audio stream,
+    /// `open_video_only`, or no device rate) structurally suppresses
+    /// `Sample::Audio` (`REQ-RD-003`).
+    a_decoder: Option<ffmpeg_next::codec::decoder::audio::Audio>,
+    /// Best video stream index — packet routing filter.
     v_stream_index: usize,
-    /// Time base of that stream — PTS math source of truth.
+    /// Best audio stream index; `None` mirrors `a_decoder == None`.
+    a_stream_index: Option<usize>,
+    /// Video stream time base — PTS math source of truth.
     v_time_base: ffmpeg_next::util::rational::Rational,
-    /// Decoder name captured at open time for error messages.
+    /// Audio stream time base — audio PTS source of truth.
+    a_time_base: ffmpeg_next::util::rational::Rational,
+    /// Video decoder name captured at open time for error messages.
     codec_name: String,
-    /// True after `send_eof` entered drain mode; afterwards only receives run.
+    /// True after packet EOF entered drain mode; the per-decoder flags latch
+    /// once each side reported EOF (audio also when it never existed).
     draining: bool,
+    v_drained: bool,
+    a_drained: bool,
     /// Owned demuxer context — kept alive for packet reads; dropped last.
     ictx: ffmpeg_next::format::context::Input,
+}
+
+#[cfg(feature = "video")]
+impl RealOpen {
+    /// True when no decoder can ever produce another sample.
+    fn fully_drained(&self) -> bool {
+        self.v_drained && self.a_drained
+    }
 }
 
 pub struct FfmpegDecoder {
@@ -554,10 +621,31 @@ impl FfmpegDecoder {
         let r_fps = stream.rate(); // r_frame_rate — sane fps fallback
         let container_micros = ictx.duration();
         let stream_ticks = stream.duration();
-        let has_audio_stream = ictx
-            .streams()
-            .best(ffmpeg_next::media::Type::Audio)
-            .is_some();
+
+        // Audio side (PR3, REQ-RD-003): open the best audio stream only when
+        // playback wants audio; otherwise `a_decoder == None` suppresses it.
+        let wants_audio = !video_only && audio_rate > 0;
+        let a_stream = if wants_audio {
+            ictx.streams().best(ffmpeg_next::media::Type::Audio)
+        } else {
+            None
+        };
+        let (a_decoder, a_stream_index, a_time_base) = match a_stream {
+            Some(a) => {
+                let index = a.index();
+                let time_base = a.time_base();
+                let a_ctx = ffmpeg_next::codec::context::Context::from_parameters(a.parameters())
+                    .map_err(|e| {
+                    ShImagesError::Media(format!("cannot read audio parameters: {e}"))
+                })?;
+                let opened = a_ctx
+                    .decoder()
+                    .audio()
+                    .map_err(|e| ShImagesError::Media(format!("cannot open audio decoder: {e}")))?;
+                (Some(opened), Some(index), time_base)
+            }
+            None => (None, None, ffmpeg_next::util::rational::Rational::new(0, 1)),
+        };
 
         // Codec parameters → codec context → opened video decoder. The typed
         // wrapper OWNS the AVCodecContext (Video → Opened → Decoder → Context).
@@ -591,7 +679,7 @@ impl FfmpegDecoder {
             height: if src_h > 0 { src_h } else { output_size.1 },
             duration,
             fps,
-            has_audio: has_audio_stream && !video_only,
+            has_audio: a_decoder.is_some(),
             container_rotation: 0,
             can_seek: true,
             hw_active: false, // SW-only slice; HW accel is a later slice.
@@ -606,12 +694,18 @@ impl FfmpegDecoder {
             hw_ctx: None,
             real: Some(RealOpen {
                 scaler: None,
+                resampler: None,
                 v_out: ffmpeg_next::frame::video::Video::empty(),
                 v_decoder,
+                a_decoder,
                 v_stream_index,
+                a_stream_index,
                 v_time_base,
+                a_time_base,
                 codec_name,
                 draining: false,
+                v_drained: false,
+                a_drained: false,
                 ictx,
             }),
         })
@@ -627,14 +721,9 @@ impl FfmpegDecoder {
         )
     }
 
-    /// Real decode loop (PR2, REQ-RD-002): receive frames until EAGAIN, then
-    /// read one packet via `av_read_frame` and feed the video decoder; on
-    /// packet EOF enter drain mode (`send_eof`) and flush buffered frames.
-    ///
-    /// One `Packet` is reused across reads (FFmpeg 7 `av_read_frame` unrefs
-    /// the incoming packet before filling it); the decoded-frame buffer is
-    /// recreated per call while the RGBA output buffer is reused — accepted
-    /// tradeoff documented in apply-progress.
+    /// Real decode loop (PR3): poll video (primary) then audio each round;
+    /// when both are dry read ONE packet and route it by stream index.
+    /// Packet EOF flushes BOTH decoders before EOS.
     #[cfg(feature = "video")]
     fn next_sample_real(&mut self) -> Result<Sample> {
         use ffmpeg_next::{
@@ -642,20 +731,50 @@ impl FfmpegDecoder {
         };
 
         let out_size = self.output_size;
+        let audio_rate = self.audio_rate;
         let Some(real) = self.real.as_mut() else {
             return Ok(Sample::EndOfStream);
         };
-        let mut decoded = DecodedFrame::empty();
+        let has_audio = real.a_decoder.is_some();
+        let mut decoded_v = DecodedFrame::empty();
+        let mut decoded_a = ffmpeg_next::frame::audio::Audio::empty();
         let mut packet = Packet::empty();
         loop {
-            match real.v_decoder.receive_frame(&mut decoded) {
-                Ok(()) => return Self::video_sample(real, &decoded, out_size),
+            match real.v_decoder.receive_frame(&mut decoded_v) {
+                Ok(()) => return Self::video_sample(real, &decoded_v, out_size),
                 Err(err) if Self::is_av_eagain(&err) => {}
-                Err(AvError::Eof) => return Ok(Sample::EndOfStream),
+                Err(AvError::Eof) => real.v_drained = true,
                 Err(err) => return Err(map_av_error(i32::from(err), &real.codec_name)),
             }
-            if real.draining {
-                // Drain mode and still EAGAIN: nothing left anywhere.
+            // Audio arm: emit only while a decoder exists and has not
+            // drained; without one the flag latches true and `Sample::Audio`
+            // is structurally suppressed (REQ-RD-003).
+            let pulled = if has_audio && !real.a_drained {
+                match real.a_decoder.as_mut() {
+                    Some(a_dec) => Some(a_dec.receive_frame(&mut decoded_a)),
+                    None => None,
+                }
+            } else {
+                None
+            };
+            match pulled {
+                Some(Ok(())) => {
+                    if let Some(sample) = Self::audio_sample(real, &decoded_a, audio_rate)? {
+                        return Ok(sample);
+                    }
+                    // Empty resampler output (filter priming): pull more input.
+                }
+                Some(Err(err)) if Self::is_av_eagain(&err) => {}
+                Some(Err(AvError::Eof)) => real.a_drained = true,
+                Some(Err(err)) => return Err(map_av_error(i32::from(err), "audio")),
+                None => {}
+            }
+            if !has_audio {
+                real.a_drained = true;
+            }
+            if real.fully_drained() || real.draining {
+                // Everything drained (or mid-drain and dry — post-flush
+                // decoders report EOF, never endless EAGAIN).
                 return Ok(Sample::EndOfStream);
             }
             match packet.read(&mut real.ictx) {
@@ -664,19 +783,133 @@ impl FfmpegDecoder {
                         real.v_decoder
                             .send_packet(&packet)
                             .map_err(|e| map_av_error(i32::from(e), &real.codec_name))?;
+                    } else if Some(packet.stream()) == real.a_stream_index {
+                        if let Some(a_dec) = real.a_decoder.as_mut() {
+                            a_dec
+                                .send_packet(&packet)
+                                .map_err(|e| map_av_error(i32::from(e), &real.codec_name))?;
+                        }
                     }
-                    // Non-video packets are consumed and skipped here;
-                    // PR3 routes audio packets to its own decoder.
+                    // Other streams are consumed and skipped here.
                 }
                 Err(AvError::Eof) => {
-                    // Packets exhausted: flush the decoder, then keep
-                    // receiving buffered frames until it reports EOF.
+                    // Flush BOTH decoders, then drain buffered frames. The
+                    // ignored results are deliberate best-effort (W4): the
+                    // `draining` flag forces termination regardless.
                     let _ = real.v_decoder.send_eof();
+                    if let Some(a_dec) = real.a_decoder.as_mut() {
+                        let _ = a_dec.send_eof();
+                    }
                     real.draining = true;
                 }
                 Err(err) => return Err(map_av_error(i32::from(err), &real.codec_name)),
             }
         }
+    }
+
+    /// Convert one decoded audio frame into interleaved f32 `Sample::Audio`
+    /// (REQ-RD-003): swr → stereo planar FLT @ device rate, then
+    /// [`interleave_stereo_f32`]; PTS via the AUDIO time base + best-effort
+    /// fallback (task 5.1). `None` = priming delay swallowed the chunk.
+    #[cfg(feature = "video")]
+    fn audio_sample(
+        real: &mut RealOpen,
+        decoded: &ffmpeg_next::frame::audio::Audio,
+        audio_rate: u32,
+    ) -> Result<Option<Sample>> {
+        use ffmpeg_next::{
+            software::resampling,
+            util::format::sample::{Sample as SampleFmt, Type as SampleType},
+        };
+
+        let src_fmt = decoded.format();
+        let src_layout = decoded.channel_layout();
+        let src_rate = decoded.rate();
+        if src_rate == 0 || src_layout.channels() == 0 {
+            return Err(ShImagesError::Media(
+                "decoded audio frame lacks rate or channel layout".to_string(),
+            ));
+        }
+        let stale = match &real.resampler {
+            Some(r) => r.src_fmt != src_fmt || r.src_layout != src_layout || r.src_rate != src_rate,
+            None => true,
+        };
+        if stale {
+            let ctx = resampling::Context::get(
+                src_fmt,
+                src_layout,
+                src_rate,
+                SampleFmt::F32(SampleType::Planar),
+                ffmpeg_next::ChannelLayout::STEREO,
+                audio_rate,
+            )
+            .map_err(|e| ShImagesError::Media(format!("cannot create resampler: {e}")))?;
+            real.resampler = Some(ResamplerDef {
+                ctx,
+                src_fmt,
+                src_layout,
+                src_rate,
+            });
+        }
+        // Pre-sized destination (src rate/layout already validated above):
+        // swr caps at this capacity, so ratio + margin prevents truncation.
+        let capacity = decoded.samples().saturating_mul(usize::from(audio_rate))
+            / usize::from(src_rate)
+            + RESAMPLE_CAPACITY_MARGIN;
+        let mut out = ffmpeg_next::frame::audio::Audio::new(
+            SampleFmt::F32(SampleType::Planar),
+            capacity,
+            ffmpeg_next::ChannelLayout::STEREO,
+        );
+        {
+            let Some(resampler) = real.resampler.as_mut() else {
+                return Err(ShImagesError::Media(
+                    "resampler missing after creation".to_string(),
+                ));
+            };
+            resampler
+                .ctx
+                .run(decoded, &mut out)
+                .map_err(|e| ShImagesError::Media(format!("swr_convert failed: {e}")))?;
+        }
+        if out.samples() == 0 {
+            return Ok(None);
+        }
+        let samples = interleave_stereo_f32(out.plane::<f32>(0), out.plane::<f32>(1));
+
+        // REQ-RD-004: NOPTS → best_effort_timestamp → ZERO, in audio time base.
+        let pts = pts_to_duration(
+            decoded.pts().unwrap_or(AV_NOPTS_VALUE),
+            real.a_time_base.numerator(),
+            real.a_time_base.denominator(),
+            decoded.timestamp(),
+            None,
+        );
+        Ok(Some(Sample::Audio { pts, samples }))
+    }
+
+    /// Real seek (PR3, REQ-RD-005): `avformat_seek_file` with a `..target`
+    /// range (BACKWARD — lands on keyframe ≤ target), then flush BOTH codec
+    /// contexts and drop the resampler so its filter delay cannot leak
+    /// pre-seek samples. Pre-roll discard stays the caller's job.
+    #[cfg(feature = "video")]
+    fn seek_real(&mut self, target: Duration) -> Result<()> {
+        let micros = clamp_seek_micros(target, self.duration);
+        let Some(real) = self.real.as_mut() else {
+            return Ok(());
+        };
+        real.ictx
+            .seek(micros, ..micros)
+            .map_err(|e| map_av_error(i32::from(e), &real.codec_name))?;
+        real.v_decoder.flush();
+        if let Some(a_dec) = real.a_decoder.as_mut() {
+            a_dec.flush();
+        }
+        real.draining = false;
+        real.v_drained = false;
+        real.a_drained = false;
+        real.resampler = None;
+        Ok(())
     }
 
     /// Convert one decoded frame into RGBA `Sample::Video` (REQ-RD-002).
@@ -785,8 +1018,12 @@ impl Decoder for FfmpegDecoder {
     }
 
     fn seek(&mut self, target: Duration) -> Result<()> {
-        // REQ-FF-008: av_seek_frame(BACKWARD) + avcodec_flush_buffers.
-        // Stub validates target and updates info.
+        // REQ-RD-005: av_seek_frame BACKWARD equivalent + avcodec_flush_buffers
+        // on the real path; the stub validates nothing and stays Ok(()).
+        #[cfg(feature = "video")]
+        if self.real.is_some() {
+            return self.seek_real(target);
+        }
         let _ = target;
         Ok(())
     }
@@ -1520,12 +1757,11 @@ mod tests {
 
     #[test]
     #[cfg(feature = "video")]
-    #[ignore = "requires FFmpeg DLLs + H264 fixture (PR3 CI lane, tasks 6.x); compiles under --features video only on this machine"]
+    #[ignore = "requires FFmpeg dev libs + committed fixture; run via `cargo test --features video -- --include-ignored` (the CI video lane does exactly this)"]
     fn next_sample_real_decode_pixels_len_equals_wh4() {
         // REQ-RD-002 "Produces RGBA": decoded Sample::Video pixels length must
         // equal width*height*4 with pts >= ZERO. Gated behind is_available()
-        // early-return per REQ-RD-008 so machines without DLLs skip cleanly;
-        // the <100 KB fixture lands in PR3 task 6.1.
+        // early-return per REQ-RD-008 so machines without DLLs skip cleanly.
         if !is_available() {
             return;
         }
@@ -1544,6 +1780,166 @@ mod tests {
             }
             other => panic!("expected Video sample, got {other:?}"),
         }
+    }
+
+    // ---- PR3 4.1/4.2 [FFI-gated]: Sample::Audio resampled to interleaved f32 ----
+
+    #[cfg(feature = "video")]
+    const FIXTURE_PATH: &str = "tests/fixtures/h264_64x64.mp4";
+    /// Drain bound: 2 s fixture = ~60 video frames + ~86 AAC chunks.
+    #[cfg(feature = "video")]
+    const FIXTURE_DRAIN_ROUNDS: usize = 4000;
+
+    #[cfg(feature = "video")]
+    fn real_fixture_available() -> bool {
+        is_available() && std::path::Path::new(FIXTURE_PATH).exists()
+    }
+
+    #[test]
+    #[cfg(feature = "video")]
+    #[ignore = "needs FFmpeg dev libs + committed fixture; CI video lane runs `cargo test --features video -- --include-ignored`"]
+    fn next_sample_real_audio_is_f32_interleaved_at_device_rate() {
+        // REQ-RD-003 S1: fixture AAC (44.1 kHz stereo) opened at device rate
+        // 48 kHz must yield non-empty, pair-aligned, finite f32 with pts>=0.
+        if !real_fixture_available() {
+            return;
+        }
+        let mut dec =
+            FfmpegDecoder::open(Path::new(FIXTURE_PATH), (64, 64), 48_000).expect("fixture opens");
+        let mut saw_video = false;
+        let mut saw_audio = false;
+        for _ in 0..FIXTURE_DRAIN_ROUNDS {
+            match dec.next_sample().expect("decode must succeed") {
+                Sample::Video(_) => saw_video = true,
+                Sample::Audio { pts, samples } => {
+                    assert!(!samples.is_empty(), "audio chunks carry samples");
+                    assert_eq!(samples.len() % 2, 0, "stereo interleave keeps L/R pairs");
+                    assert!(samples.iter().all(f32::is_finite), "f32 stays finite");
+                    assert!(pts >= Duration::ZERO, "audio pts monotonic");
+                    saw_audio = true;
+                }
+                Sample::EndOfStream => break,
+            }
+        }
+        assert!(saw_video && saw_audio, "fixture must yield both streams");
+    }
+
+    #[test]
+    #[cfg(feature = "video")]
+    #[ignore = "needs FFmpeg dev libs + committed fixture; CI video lane runs `cargo test --features video -- --include-ignored`"]
+    fn open_video_only_real_never_emits_audio() {
+        // REQ-RD-003 S2: no Audio variant may ever surface from open_video_only.
+        if !real_fixture_available() {
+            return;
+        }
+        let mut dec = FfmpegDecoder::open_video_only(Path::new(FIXTURE_PATH), (64, 64))
+            .expect("fixture opens");
+        assert!(!dec.info().has_audio);
+        for _ in 0..FIXTURE_DRAIN_ROUNDS {
+            match dec.next_sample().expect("decode must succeed") {
+                Sample::Audio { .. } => panic!("video_only decoder emitted Audio"),
+                Sample::Video(_) => {}
+                Sample::EndOfStream => break,
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "video")]
+    #[ignore = "needs FFmpeg dev libs + committed fixture; CI video lane runs `cargo test --features video -- --include-ignored`"]
+    fn seek_real_decode_reaches_target_after_preroll_discard() {
+        // REQ-RD-005 S1: BACKWARD lands on keyframe ≤ target (-g 30 ⇒ 1 s
+        // GOP); decoding then reaches pts ≥ target without stale panics.
+        if !real_fixture_available() {
+            return;
+        }
+        let target = Duration::from_secs(1);
+        let mut dec =
+            FfmpegDecoder::open(Path::new(FIXTURE_PATH), (64, 64), 48_000).expect("fixture opens");
+        dec.seek(target).expect("seek succeeds");
+        let mut reached = false;
+        for _ in 0..FIXTURE_DRAIN_ROUNDS {
+            match dec.next_sample().expect("decode after seek") {
+                // Video may not land PAST target+500 ms (BACKWARD guarantee).
+                Sample::Video(frame) => {
+                    assert!(frame.pts <= target + Duration::from_millis(500));
+                    reached |= frame.pts >= target;
+                }
+                Sample::Audio { pts, .. } => reached |= pts >= target,
+                Sample::EndOfStream => break,
+            }
+        }
+        assert!(reached, "decoding after seek must reach pts >= target");
+    }
+
+    #[test]
+    fn interleave_audio_planes_and_resample_capacity_contracts() {
+        // REQ-RD-003: Sample::Audio.samples is INTERLEAVED f32 (L R L R …).
+        assert_eq!(
+            interleave_stereo_f32(&[0.10f32, 0.20], &[0.30f32, 0.40]),
+            vec![0.10, 0.30, 0.20, 0.40]
+        );
+        // Defensive: mismatched planes pair strictly (tail dropped), keeping
+        // len == 2*pairs; empty inputs yield empty. Never panics.
+        assert_eq!(
+            interleave_stereo_f32(&[1.0f32, 2.0, 3.0], &[9.0f32]),
+            vec![1.0, 9.0]
+        );
+        assert!(interleave_stereo_f32(&[], &[]).is_empty());
+        // Output capacity contract: same-rate keeps input+margin; 8k→48k
+        // upscales 6×; degenerate rates still yield the allocatable margin.
+        let cap = |s: usize, src: u32| s * 48_000usize / src as usize + RESAMPLE_CAPACITY_MARGIN;
+        assert_eq!(cap(1024, 48_000), 1024 + RESAMPLE_CAPACITY_MARGIN);
+        assert_eq!(cap(1024, 8_000), 1024 * 6 + RESAMPLE_CAPACITY_MARGIN);
+    }
+
+    // ---- PR3 5.2 [RED]: seek target clamped to container duration ----
+
+    #[test]
+    fn clamp_seek_micros_clamps_passes_through_and_saturates() {
+        // REQ-RD-005: seek beyond EOF clamps to duration (AV_TIME_BASE micros).
+        assert_eq!(
+            clamp_seek_micros(
+                Duration::from_secs_f64(20.0),
+                Some(Duration::from_millis(12_300))
+            ),
+            12_300_000
+        );
+        assert_eq!(
+            clamp_seek_micros(Duration::from_secs(5), Some(Duration::from_secs(10))),
+            5_000_000
+        );
+        // Unknown duration passes the raw target through; zero stays zero.
+        assert_eq!(
+            clamp_seek_micros(Duration::from_millis(1500), None),
+            1_500_000
+        );
+        assert_eq!(clamp_seek_micros(Duration::ZERO, None), 0);
+    }
+
+    // ---- PR3 5.3: set_output_size hysteresis wiring ----
+
+    #[test]
+    fn set_output_size_hysteresis_wiring_updates_output_geometry_only_past_threshold() {
+        // Approval-style: pins that the wiring updates the geometry the real
+        // scaler reads, while sub-threshold requests stay untouched (REQ-FF-003).
+        ensure_stub();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clip_resize.mp4");
+        std::fs::write(&path, b"stub").unwrap();
+        let mut dec = FfmpegDecoder::open(&path, (1920, 1080), 48_000).unwrap();
+        dec.set_output_size(1900, 1070).unwrap();
+        assert_eq!(
+            dec.output_size,
+            (1920, 1080),
+            "sub-threshold must not renegotiate"
+        );
+        dec.set_output_size(800, 600).unwrap();
+        assert_eq!(
+            dec.output_size,
+            (800, 600),
+            "large resize must update geometry"
+        );
     }
 
     #[test]
