@@ -685,6 +685,31 @@ impl FfmpegDecoder {
             hw_active: false, // SW-only slice; HW accel is a later slice.
         };
 
+        let mut real = RealOpen {
+            scaler: None,
+            resampler: None,
+            v_out: ffmpeg_next::frame::video::Video::empty(),
+            v_decoder,
+            a_decoder,
+            v_stream_index,
+            a_stream_index,
+            v_time_base,
+            a_time_base,
+            codec_name,
+            draining: false,
+            v_drained: false,
+            a_drained: false,
+            ictx,
+        };
+        // avformat_find_stream_info (inside format::input) reads packets to
+        // identify streams; on tiny fixtures it can consume the WHOLE file,
+        // leaving the demuxer at EOF so the first next_sample would see
+        // packet-EOF and drain immediately (observed on the CI video lane).
+        // Rewind to timestamp 0 (BACKWARD → first keyframe) before decoding.
+        if let Err(e) = real.ictx.seek(0, ..0) {
+            tracing::debug!(error = %e, "rewind after open failed; decode may start mid-file");
+        }
+
         Ok(Self {
             info,
             output_size,
@@ -692,22 +717,7 @@ impl FfmpegDecoder {
             video_only,
             duration,
             hw_ctx: None,
-            real: Some(RealOpen {
-                scaler: None,
-                resampler: None,
-                v_out: ffmpeg_next::frame::video::Video::empty(),
-                v_decoder,
-                a_decoder,
-                v_stream_index,
-                a_stream_index,
-                v_time_base,
-                a_time_base,
-                codec_name,
-                draining: false,
-                v_drained: false,
-                a_drained: false,
-                ictx,
-            }),
+            real: Some(real),
         })
     }
 
@@ -719,6 +729,16 @@ impl FfmpegDecoder {
             ffmpeg_next::util::error::Error::Other { errno }
                 if *errno == ffmpeg_next::util::error::EAGAIN
         )
+    }
+
+    /// Loop diagnostics: visible only in the lib-test target (CI video lane
+    /// shows captured stderr for failing tests). No-op everywhere else.
+    #[cfg(feature = "video")]
+    fn loop_dbg(msg: &str) {
+        #[cfg(test)]
+        eprintln!("[ffmpeg-real] {msg}");
+        #[cfg(not(test))]
+        let _ = msg;
     }
 
     /// Real decode loop (PR3): poll video (primary) then audio each round;
@@ -742,8 +762,13 @@ impl FfmpegDecoder {
         loop {
             match real.v_decoder.receive_frame(&mut decoded_v) {
                 Ok(()) => return Self::video_sample(real, &decoded_v, out_size),
-                Err(err) if Self::is_av_eagain(&err) => {}
-                Err(AvError::Eof) => real.v_drained = true,
+                Err(err) if Self::is_av_eagain(&err) => {
+                    Self::loop_dbg("v_recv EAGAIN");
+                }
+                Err(AvError::Eof) => {
+                    Self::loop_dbg("v_recv EOF");
+                    real.v_drained = true;
+                }
                 Err(err) => return Err(map_av_error(i32::from(err), &real.codec_name)),
             }
             // Audio arm: emit only while a decoder exists and has not
@@ -763,8 +788,13 @@ impl FfmpegDecoder {
                     }
                     // Empty resampler output (filter priming): pull more input.
                 }
-                Some(Err(err)) if Self::is_av_eagain(&err) => {}
-                Some(Err(AvError::Eof)) => real.a_drained = true,
+                Some(Err(err)) if Self::is_av_eagain(&err) => {
+                    Self::loop_dbg("a_recv EAGAIN");
+                }
+                Some(Err(AvError::Eof)) => {
+                    Self::loop_dbg("a_recv EOF");
+                    real.a_drained = true;
+                }
                 Some(Err(err)) => return Err(map_av_error(i32::from(err), "audio")),
                 None => {}
             }
@@ -774,10 +804,17 @@ impl FfmpegDecoder {
             if real.fully_drained() || real.draining {
                 // Everything drained (or mid-drain and dry — post-flush
                 // decoders report EOF, never endless EAGAIN).
+                Self::loop_dbg("EOS: fully_drained||draining");
                 return Ok(Sample::EndOfStream);
             }
             match packet.read(&mut real.ictx) {
                 Ok(()) => {
+                    Self::loop_dbg(&format!(
+                        "pkt stream={} (v={}, a={:?})",
+                        packet.stream(),
+                        real.v_stream_index,
+                        real.a_stream_index
+                    ));
                     if packet.stream() == real.v_stream_index {
                         real.v_decoder
                             .send_packet(&packet)
@@ -795,6 +832,7 @@ impl FfmpegDecoder {
                     // Flush BOTH decoders, then drain buffered frames. The
                     // ignored results are deliberate best-effort (W4): the
                     // `draining` flag forces termination regardless.
+                    Self::loop_dbg("pkt EOF -> send_eof both");
                     let _ = real.v_decoder.send_eof();
                     if let Some(a_dec) = real.a_decoder.as_mut() {
                         let _ = a_dec.send_eof();
@@ -1322,7 +1360,7 @@ mod tests {
         // site and it mutates the process-global TEST_FFMPEG_STUB atomic, so it
         // must hold the same guard as every other global-state test or a
         // parallel stub-dependent test can observe the false window.
-        let _guard = TEST_HW_MUTEX.lock().unwrap();
+        let _guard = TEST_HW_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
         // PR1 1.2: stub override must flip availability both ways so SW logic
         // is testable without DLLs (REQ-RD-008). Restore true afterwards — the
         // rest of this suite relies on ensure_stub().
@@ -1331,7 +1369,11 @@ mod tests {
         set_test_stub(false);
         // In test builds probe_dll_inner never loads libraries (Windows cfg!(test)
         // guard / non-Windows always-false), so without the stub this is false.
-        assert!(!is_available(), "stub=false must fall back to DLL probe");
+        // Exception: the CI video lane sets SH_IMAGES_FFMPEG_REAL=1, which by
+        // design keeps availability true — skip that branch there.
+        if std::env::var("SH_IMAGES_FFMPEG_REAL").as_deref() != Ok("1") {
+            assert!(!is_available(), "stub=false must fall back to DLL probe");
+        }
         set_test_stub(true);
         assert!(is_available());
     }
@@ -1599,7 +1641,7 @@ mod tests {
 
     #[test]
     fn open_with_hw_force_fail_falls_back_to_sw_hw_active_false() {
-        let _lock = TEST_HW_MUTEX.lock().unwrap();
+        let _lock = TEST_HW_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
         ensure_stub();
         // Force HW failure via atomic override — thread-safe, no env race.
         set_test_hw_force_fail(true);
