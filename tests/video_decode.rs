@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use sh_images::core::video::backend::Sample;
+use sh_images::core::video::backend::{Decoder, Sample};
 use sh_images::core::video::ffmpeg::FfmpegDecoder;
 
 const FIXTURE_PATH: &str = "tests/fixtures/h264_64x64.mp4";
