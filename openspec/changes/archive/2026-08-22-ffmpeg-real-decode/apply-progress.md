@@ -216,3 +216,22 @@ PR3 slice (tasks 4.x–6.x): audio SwrContext, seek BACKWARD+flush, fixture <100
 ## Next
 
 All 16 implementation tasks complete (7.1 cleanup excluded from this slice per assignment). Ready for `sdd-verify` final/canonical run (native admission against the full 9-requirement/18-scenario spec) once the orchestrator resolves the PR boundary question.
+
+---
+
+# Apply Progress Addendum — Post-review CI fixes (final state)
+
+**Recorded at archive time (2026-08-22).** The three slice reports above are valid snapshots of their writing time; this addendum is the FINAL word on the FFI build/test surface. After the original three work-unit commits were reviewed, the first real compile/run of all `#[cfg(feature = "video")]` code (CI lane + maintainer review) surfaced defects that local default builds structurally could not see (gated code never compiled on the dev machine). Eight fix commits landed via stacked PR #15 before merge to main:
+
+| Commit | Fix | Why it was needed |
+|--------|-----|-------------------|
+| `1974f60` | Trimmed ffmpeg-next to minimal features: `default-features = false` keeping only codec/format/software-resampling/software-scaling | Default feature set pulled avfilter/avdevice, forcing `libavfilter.pc`/`libavdevice.pc` requirements the decoder never uses — broke every feature build including CI |
+| `49fa855` | Corrected `software::scaling` import path + usize casts under cfg(video) | Wrong module path and integer-type mismatches invisible to default builds; caught on first gated compile |
+| `920dbdf` | Closure fix for `iter().all(...)` under cfg(video) test | Compile error in gated test code |
+| `510a967` | `cargo fmt` | Formatting drift across touched files |
+| `d5c5f0e` | Clippy `manual_map`/`manual_clamp` fixes under cfg(video) | `-D warnings` gate failures in gated code |
+| `b42db77` | Rewound demuxer after `open_real`; skip env-conflict test when `SH_IMAGES_FFMPEG_REAL=1`; poison-tolerant mutex | `find_stream_info` had consumed the tiny fixture's packets so the first decode pass hit immediate EOF; one test self-conflicted under the runtime-lane env var; a panicked parallel test poisoned the shared lock |
+| `c26e4ea` | Isolated real-decode tests into dedicated `tests/video_decode.rs` integration target | Gated tests require `--features video` + linked libav* dev libs; isolation keeps default `cargo test` lanes dependency-free |
+| `34eecb3` | Imported `Decoder` trait in the new integration target | Compile completion of the isolated target |
+
+**Closure evidence (final)**: CI run `32585174001` fully green on the merge commit AND on the post-merge main push — all 4 jobs pass, including `video (--features video)` which compiles the FFI against dev libs and runs the real-decode suite (`tests/video_decode.rs`, 4 passed) with `[ffmpeg-real]` trace proving packet routing and frame decoding. Local main @ `8a7b9fe`: `cargo test --lib` 472 passed / 0 failed / 1 ignored. This closes W1 with runtime proof. Task 7.1 was subsequently reconciled complete at archive time (see archive-report.md).

@@ -60,4 +60,4 @@ Chain strategy: stacked-to-main
 
 ## Phase 7: Cleanup
 
-- [ ] 7.1 fmt FrameRing — est 5 — AC: clippy clean — Dep: 6.2 — Test: full
+- [x] 7.1 fmt FrameRing — est 5 — AC: clippy clean — Dep: 6.2 — Test: full *(reconciled at archive 2026-08-22: ring.rs untouched by this change so no fmt churn existed; AC independently met — `cargo fmt --check` exit 0 and clippy `-D warnings` green on main incl. cfg(video) via CI run 32585174001 + fixes d5c5f0e/510a967)*
