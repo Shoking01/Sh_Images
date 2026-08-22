@@ -1815,7 +1815,10 @@ mod tests {
                 Sample::Audio { pts, samples } => {
                     assert!(!samples.is_empty(), "audio chunks carry samples");
                     assert_eq!(samples.len() % 2, 0, "stereo interleave keeps L/R pairs");
-                    assert!(samples.iter().all(|&s| f32::is_finite(s)), "f32 stays finite");
+                    assert!(
+                        samples.iter().all(|&s| f32::is_finite(s)),
+                        "f32 stays finite"
+                    );
                     assert!(pts >= Duration::ZERO, "audio pts monotonic");
                     saw_audio = true;
                 }
