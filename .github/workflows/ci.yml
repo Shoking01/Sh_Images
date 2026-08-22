@@ -91,7 +91,10 @@ jobs:
       - name: Real decode tests (linked dev libs + committed fixture)
         env:
           SH_IMAGES_FFMPEG_REAL: "1"
-        run: cargo test --features video -- --include-ignored
+          SH_IMAGES_FFMPEG_DEBUG: "1"
+        # Dedicated integration target: own process, isolated from the lib
+        # suite's process-global stub atomics (see tests/video_decode.rs).
+        run: cargo test --features video --test video_decode -- --nocapture
 
   # La MSRV declarada en Cargo.toml no se verificaba en ningún sitio. Un backend
   # de medios es exactamente el tipo de dependencia que la sube sin avisar.

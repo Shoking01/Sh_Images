@@ -731,14 +731,14 @@ impl FfmpegDecoder {
         )
     }
 
-    /// Loop diagnostics: visible only in the lib-test target (CI video lane
-    /// shows captured stderr for failing tests). No-op everywhere else.
+    /// Loop diagnostics: emitted only when SH_IMAGES_FFMPEG_DEBUG=1 (used by
+    /// the CI video lane and manual runs; integration targets link this lib
+    /// WITHOUT cfg(test), so an env gate — not cfg(test) — is what works).
     #[cfg(feature = "video")]
     fn loop_dbg(msg: &str) {
-        #[cfg(test)]
-        eprintln!("[ffmpeg-real] {msg}");
-        #[cfg(not(test))]
-        let _ = msg;
+        if std::env::var("SH_IMAGES_FFMPEG_DEBUG").as_deref() == Ok("1") {
+            eprintln!("[ffmpeg-real] {msg}");
+        }
     }
 
     /// Real decode loop (PR3): poll video (primary) then audio each round;
@@ -1797,125 +1797,11 @@ mod tests {
         assert_eq!(px.len(), w * h * 4);
     }
 
-    #[test]
-    #[cfg(feature = "video")]
-    #[ignore = "requires FFmpeg dev libs + committed fixture; run via `cargo test --features video -- --include-ignored` (the CI video lane does exactly this)"]
-    fn next_sample_real_decode_pixels_len_equals_wh4() {
-        // REQ-RD-002 "Produces RGBA": decoded Sample::Video pixels length must
-        // equal width*height*4 with pts >= ZERO. Gated behind is_available()
-        // early-return per REQ-RD-008 so machines without DLLs skip cleanly.
-        if !is_available() {
-            return;
-        }
-        let fixture = std::path::Path::new("tests/fixtures/h264_64x64.mp4");
-        if !fixture.exists() {
-            return;
-        }
-        let mut dec = FfmpegDecoder::open(fixture, (64, 64), 48_000).expect("fixture must open");
-        match dec.next_sample().expect("decode must succeed") {
-            Sample::Video(frame) => {
-                assert_eq!(
-                    frame.pixels.len(),
-                    (frame.width * frame.height * 4) as usize
-                );
-                assert!(frame.pts >= Duration::ZERO, "pts must be monotonic");
-            }
-            other => panic!("expected Video sample, got {other:?}"),
-        }
-    }
-
-    // ---- PR3 4.1/4.2 [FFI-gated]: Sample::Audio resampled to interleaved f32 ----
-
-    #[cfg(feature = "video")]
-    const FIXTURE_PATH: &str = "tests/fixtures/h264_64x64.mp4";
-    /// Drain bound: 2 s fixture = ~60 video frames + ~86 AAC chunks.
-    #[cfg(feature = "video")]
-    const FIXTURE_DRAIN_ROUNDS: usize = 4000;
-
-    #[cfg(feature = "video")]
-    fn real_fixture_available() -> bool {
-        is_available() && std::path::Path::new(FIXTURE_PATH).exists()
-    }
-
-    #[test]
-    #[cfg(feature = "video")]
-    #[ignore = "needs FFmpeg dev libs + committed fixture; CI video lane runs `cargo test --features video -- --include-ignored`"]
-    fn next_sample_real_audio_is_f32_interleaved_at_device_rate() {
-        // REQ-RD-003 S1: fixture AAC (44.1 kHz stereo) opened at device rate
-        // 48 kHz must yield non-empty, pair-aligned, finite f32 with pts>=0.
-        if !real_fixture_available() {
-            return;
-        }
-        let mut dec =
-            FfmpegDecoder::open(Path::new(FIXTURE_PATH), (64, 64), 48_000).expect("fixture opens");
-        let mut saw_video = false;
-        let mut saw_audio = false;
-        for _ in 0..FIXTURE_DRAIN_ROUNDS {
-            match dec.next_sample().expect("decode must succeed") {
-                Sample::Video(_) => saw_video = true,
-                Sample::Audio { pts, samples } => {
-                    assert!(!samples.is_empty(), "audio chunks carry samples");
-                    assert_eq!(samples.len() % 2, 0, "stereo interleave keeps L/R pairs");
-                    assert!(
-                        samples.iter().all(|&s| f32::is_finite(s)),
-                        "f32 stays finite"
-                    );
-                    assert!(pts >= Duration::ZERO, "audio pts monotonic");
-                    saw_audio = true;
-                }
-                Sample::EndOfStream => break,
-            }
-        }
-        assert!(saw_video && saw_audio, "fixture must yield both streams");
-    }
-
-    #[test]
-    #[cfg(feature = "video")]
-    #[ignore = "needs FFmpeg dev libs + committed fixture; CI video lane runs `cargo test --features video -- --include-ignored`"]
-    fn open_video_only_real_never_emits_audio() {
-        // REQ-RD-003 S2: no Audio variant may ever surface from open_video_only.
-        if !real_fixture_available() {
-            return;
-        }
-        let mut dec = FfmpegDecoder::open_video_only(Path::new(FIXTURE_PATH), (64, 64))
-            .expect("fixture opens");
-        assert!(!dec.info().has_audio);
-        for _ in 0..FIXTURE_DRAIN_ROUNDS {
-            match dec.next_sample().expect("decode must succeed") {
-                Sample::Audio { .. } => panic!("video_only decoder emitted Audio"),
-                Sample::Video(_) => {}
-                Sample::EndOfStream => break,
-            }
-        }
-    }
-
-    #[test]
-    #[cfg(feature = "video")]
-    #[ignore = "needs FFmpeg dev libs + committed fixture; CI video lane runs `cargo test --features video -- --include-ignored`"]
-    fn seek_real_decode_reaches_target_after_preroll_discard() {
-        // REQ-RD-005 S1: BACKWARD lands on keyframe ≤ target (-g 30 ⇒ 1 s
-        // GOP); decoding then reaches pts ≥ target without stale panics.
-        if !real_fixture_available() {
-            return;
-        }
-        let target = Duration::from_secs(1);
-        let mut dec =
-            FfmpegDecoder::open(Path::new(FIXTURE_PATH), (64, 64), 48_000).expect("fixture opens");
-        dec.seek(target).expect("seek succeeds");
-        let mut reached = false;
-        for _ in 0..FIXTURE_DRAIN_ROUNDS {
-            match dec.next_sample().expect("decode after seek") {
-                // Video may not land PAST target+500 ms (BACKWARD guarantee).
-                Sample::Video(frame) => {
-                    assert!(frame.pts <= target + Duration::from_millis(500));
-                    reached |= frame.pts >= target;
-                }
-                Sample::Audio { pts, .. } => reached |= pts >= target,
-                Sample::EndOfStream => break,
-            }
-        }
-        assert!(reached, "decoding after seek must reach pts >= target");
-    }
+    // ---- Real-decode runtime tests moved to tests/video_decode.rs ----
+    // (own integration TARGET: lib unit tests flip the process-global
+    // TEST_FFMPEG_STUB atomic, which raced the real path via allow_stub and
+    // diverted open() to the stub mid-run — instant EOS on the CI video lane.
+    // A separate target gives each suite its own process.)
 
     #[test]
     fn interleave_audio_planes_and_resample_capacity_contracts() {
