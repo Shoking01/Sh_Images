@@ -53,6 +53,29 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # FFmpeg 7.1.1 shared (LGPL) runtime DLLs bundled into the MSI by Files.wxs.
+      # Pinned build so avcodec-61 etc. always match what ffmpeg-sys-next links.
+      - name: Download FFmpeg shared DLLs
+        run: |
+          $zipPath = "$env:TEMP\ffmpeg-n7.1.1-shared.zip"
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2025-06-30-13-55/ffmpeg-n7.1.1-54-g6400860b9d-win64-lgpl-shared-7.1.zip" -OutFile $zipPath
+          New-Item -ItemType Directory -Force -Path "$env:TEMP\ffmpeg711", "target\release" | Out-Null
+          tar -xf $zipPath -C "$env:TEMP\ffmpeg711"
+          $bin = Get-ChildItem "$env:TEMP\ffmpeg711" -Directory | Select-Object -First 1
+          foreach ($dll in "avcodec-61.dll","avformat-61.dll","avutil-59.dll","swresample-5.dll","swscale-8.dll") {
+            Copy-Item "$($bin.FullName)\bin\$dll" target\release\ -ErrorAction Stop
+          }
+          Write-Host "FFmpeg DLLs staged:"; Get-ChildItem target\release\*.dll | ForEach-Object { $_.Name }
+
+      - name: Ensure libclang for bindgen
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files\LLVM\bin\libclang.dll")) {
+            choco install llvm -y --no-progress
+          } else {
+            Write-Host "LLVM already present"
+          }
+
       - name: Install WiX 3.14
         run: |
           $zipPath = "$env:TEMP\wix314-binaries.zip"
@@ -60,7 +83,7 @@ jobs:
           Expand-Archive -Path $zipPath -DestinationPath "C:\wix" -Force
 
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --release --features video
 
       - name: Copy icon.ico to installer dir
         run: |
@@ -79,7 +102,9 @@ jobs:
         run: |
           $msi = Get-Item installer\windows\sh_images-*-x64.msi
           if (-not $msi) { throw "MSI was not generated" }
-          if ($msi.Length -gt 30MB) { throw "MSI size $($msi.Length) exceeds 30MB limit" }
+          # FFmpeg DLLs (~110 MB raw, cab-compressed) put the MSI in the 60-90 MB band (REQ-FF-012).
+          if ($msi.Length -lt 40MB) { throw "MSI too small ($($msi.Length)) — FFmpeg DLLs probably missing" }
+          if ($msi.Length -gt 150MB) { throw "MSI size $($msi.Length) exceeds 150MB limit" }
           Write-Host "MSI OK: $([math]::Round($msi.Length / 1MB, 2)) MB"
 
       - name: Upload MSI artifact
@@ -105,6 +130,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install system deps
+        # Linux/macOS ship WITHOUT video playback for now (image viewer core
+        # works; enabling it needs libav*-dev at build AND runtime .so bundling
+        # — tracked as follow-up in the ffmpeg archive report).
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -116,7 +144,7 @@ jobs:
             libegl-mesa0 \
             libgl1-mesa-dri
 
-      - name: Build release binary
+      - name: Build release binary (no video on Linux for now)
         run: cargo build --release
 
       - name: Rename binary for upload
@@ -144,7 +172,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary
+      - name: Install system deps
+        # macOS binary ships without video playback for now (see Linux note).
         run: cargo build --release
 
       - name: Rename binary for upload
