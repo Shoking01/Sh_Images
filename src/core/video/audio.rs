@@ -132,27 +132,71 @@ impl AudioBuffer {
     /// Rellena el bloque del dispositivo. Devuelve la ganancia resultante.
     ///
     /// Lo que falte se rellena con silencio en vez de repetir muestras viejas.
+    ///
+    /// La producción siempre es estéreo intercalado (L,R); el dispositivo puede
+    /// pedir otra cantidad de canales, así que se mapea sin cambiar el formato:
+    /// mono promedia L/R, más de dos canales usa los primeros dos y silencia
+    /// el resto. El reloj maestro sólo avanza por contenido real: contar el
+    /// silencio de relleno adelantaba al video en cada underrun.
     pub fn fill(&self, out: &mut [f32], gain: f32, k: f32, channels: usize) -> f32 {
         let Ok(mut q) = self.samples.try_lock() else {
             // Nunca bloquear aquí: mejor un bloque de silencio que un corte.
             out.fill(0.0);
             return gain;
         };
-        let n = q.len().min(out.len());
-        for slot in out.iter_mut().take(n) {
-            *slot = q.pop_front().unwrap_or(0.0);
-        }
-        if n < out.len() {
-            out[n..].fill(0.0);
-            self.starved.store(true, Ordering::Relaxed);
+        let ch = channels.max(1);
+        let mut consumed = 0usize; // muestras estéreo reales sacadas de la cola
+        match ch {
+            2 => {
+                // Camino rápido: el layout del dispositivo coincide.
+                let n = q.len().min(out.len());
+                for slot in out.iter_mut().take(n) {
+                    *slot = q.pop_front().unwrap_or(0.0);
+                }
+                consumed = n;
+                if n < out.len() {
+                    out[n..].fill(0.0);
+                    self.starved.store(true, Ordering::Relaxed);
+                }
+            }
+            1 => {
+                for slot in out.iter_mut() {
+                    if q.len() >= 2 {
+                        let l = q.pop_front().unwrap_or(0.0);
+                        let r = q.pop_front().unwrap_or(0.0);
+                        *slot = (l + r) * 0.5;
+                        consumed += 2;
+                    } else {
+                        *slot = 0.0;
+                        self.starved.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
+            _ => {
+                for frame in out.chunks_exact_mut(ch) {
+                    if q.len() >= 2 {
+                        let l = q.pop_front().unwrap_or(0.0);
+                        let r = q.pop_front().unwrap_or(0.0);
+                        frame[0] = l;
+                        frame[1] = r;
+                        for extra in frame[2..].iter_mut() {
+                            *extra = 0.0;
+                        }
+                        consumed += 2;
+                    } else {
+                        frame.fill(0.0);
+                        self.starved.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
         }
         drop(q);
 
         let target = self.target_gain();
         let result = apply_gain_ramp(out, gain, target, k);
-        let ch = channels.max(1);
+        // Producción estéreo: 2 muestras consumidas = 1 frame de reloj.
         self.frames_played
-            .fetch_add((out.len() / ch) as u64, Ordering::Relaxed);
+            .fetch_add((consumed / 2) as u64, Ordering::Relaxed);
         result
     }
 }
@@ -265,6 +309,49 @@ mod tests {
             "debería haberse marcado la falta de datos"
         );
         assert!(!b.take_starved(), "el aviso se consume una sola vez");
+    }
+
+    #[test]
+    fn starvation_padding_does_not_advance_the_master_clock() {
+        // El silencio de relleno no es contenido: contarlo adelantaba al video
+        // en cada underrun y armaba la espiral de drops + petardeo.
+        let b = AudioBuffer::new(100);
+        b.push(&[1.0, 1.0]); // 1 frame estéreo real
+        let mut out = [9.0f32; 100]; // 50 frames pedidos, hay para 1
+        b.fill(&mut out, 1.0, 1.0, 2);
+        assert_eq!(
+            b.frames_played(),
+            1,
+            "sólo el frame con contenido real avanza el reloj"
+        );
+    }
+
+    #[test]
+    fn mono_device_downmixes_stereo_pairs() {
+        let b = AudioBuffer::new(100);
+        b.set_target_gain(1.0);
+        b.push(&[0.6, 0.2, 0.4, -0.2]);
+        let mut out = [0.0f32; 2];
+        b.fill(&mut out, 1.0, 1.0, 1);
+        assert!(
+            (out[0] - 0.4).abs() < 1e-6,
+            "L y R promediados, fue {}",
+            out[0]
+        );
+        assert!((out[1] - 0.1).abs() < 1e-6, "fue {}", out[1]);
+        assert_eq!(b.frames_played(), 2, "dos pares consumidos = dos frames");
+    }
+
+    #[test]
+    fn surround_device_maps_stereo_to_first_two_channels() {
+        let b = AudioBuffer::new(1000);
+        b.set_target_gain(1.0);
+        b.push(&[0.5, 0.25, 0.75, 0.125]); // dos frames estéreo
+        let mut out = [9.0f32; 12]; // 2 frames de 6 canales
+        b.fill(&mut out, 1.0, 1.0, 6);
+        assert_eq!(&out[0..6], &[0.5, 0.25, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(&out[6..12], &[0.75, 0.125, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(b.frames_played(), 2);
     }
 
     #[test]
