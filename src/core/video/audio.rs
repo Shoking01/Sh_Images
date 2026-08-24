@@ -120,6 +120,13 @@ impl AudioBuffer {
         self.lock().len() >= self.capacity
     }
 
+    /// Capacidad total en muestras (todos los canales). Un tercio de esto es
+    /// la marca de agua baja que mantiene fluyendo el audio aunque el ring de
+    /// video esté lleno (rompe el deadlock reloj↔ring).
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     /// Encola muestras del decodificador. Devuelve cuántas entraron.
     pub fn push(&self, samples: &[f32]) -> usize {
         let mut q = self.lock();

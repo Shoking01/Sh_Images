@@ -178,6 +178,21 @@ impl VideoPlayer {
         &self.path
     }
 
+    /// Diagnóstico: muestras estéreo encoladas en el buffer de audio.
+    pub fn audio_len(&self) -> usize {
+        self.audio.len()
+    }
+
+    /// Diagnóstico: frames de video en el ring.
+    pub fn ring_len(&self) -> usize {
+        self.ring.len()
+    }
+
+    /// Diagnóstico: rate del dispositivo de salida (0 = desconocido).
+    pub fn audio_sample_rate(&self) -> u32 {
+        self.shared().audio_sample_rate
+    }
+
     fn shared(&self) -> std::sync::MutexGuard<'_, Shared> {
         self.shared.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -374,7 +389,16 @@ impl VideoPlayer {
             self.consecutive_drops =
                 timeline::update_drop_counter(self.consecutive_drops, decision);
             match decision {
-                FrameDecision::Wait(_) => break,
+                FrameDecision::Wait(_) => {
+                    // Garantía de progreso: con el ring lleno, un frame
+                    // "temprano" se presenta igual. Esperar podría congelar la
+                    // imagen para siempre si el reloj maestro se quedó sin
+                    // audio (deadlock reloj↔ring ya observado).
+                    if self.ring.len() >= self.ring.capacity() {
+                        presentable = self.ring.try_pop();
+                    }
+                    break;
+                }
                 FrameDecision::Present => {
                     presentable = self.ring.try_pop();
                     break;
@@ -589,7 +613,17 @@ fn decoder_thread(
         // obsoletos y se descartan, dejando el ring vacío y la imagen
         // congelada aunque el audio siga avanzando. El ring necesita seguir
         // frenando el decode para mantenerse cerca del tiempo real.
-        if ring.is_full() || (info.has_audio && audio.is_full()) {
+        //
+        // EXCEPCIÓN que rompe el deadlock reloj↔ring: si la cola de audio
+        // está por debajo de la marca de agua baja, se sigue decodificando
+        // AUNQUE el ring esté lleno. Si no, el video priorizado llena el
+        // ring antes de que el audio fluya, el callback se queda sin nada,
+        // frames_played (reloj maestro) se congela y la UI nunca drena: el
+        // video se clava en el primer segundo (observado con dispositivo
+        // a 192 kHz).
+        let audio_low_watermark = audio.capacity() / 3;
+        let audio_hungry = audio.len() < audio_low_watermark;
+        if audio.is_full() || (ring.is_full() && !audio_hungry) {
             match cmd_rx.recv_timeout(Duration::from_millis(4)) {
                 Ok(PlayerCommand::Shutdown) => break,
                 Ok(PlayerCommand::Play) => playing = true,
@@ -611,6 +645,16 @@ fn decoder_thread(
                 // lo que mantiene al decodificador cerca del ritmo real. Ver
                 // el comentario del gate de contrapresión más arriba sobre
                 // por qué `try_push` (sin bloquear) resultó peor, no mejor.
+                //
+                // EXCEPCIÓN (deadlock reloj↔ring): si el audio pasa hambre y
+                // el ring está lleno, el frame de video se sacrifica (píxeles
+                // reciclados) en vez de bloquear el hilo: el audio tiene
+                // prioridad porque ES el reloj maestro.
+                if ring.is_full() && audio.len() < audio.capacity() / 3 {
+                    let expected = frame.pixels.len();
+                    ring.recycle(frame.pixels, expected);
+                    continue;
+                }
                 if !ring.push(epoch, frame) && ring.is_closed() {
                     break;
                 }
@@ -845,6 +889,34 @@ mod tests {
         let now = Instant::now();
         p.seek_backward(now);
         assert_eq!(p.pending_seek, Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn tick_with_full_ring_always_makes_progress_even_with_frozen_clock() {
+        // Deadlock reloj↔ring: con el reloj maestro congelado (sin audio), el
+        // segundo frame (16 ms adelante) sería "Wait" eterno y el ring lleno
+        // no drenaría jamás. La garantía de progreso presenta el más viejo.
+        let mut p = player_for("no_existe_98765.mp4");
+        // El hilo decodificador murió ya (stub); el ring lo llenamos a mano.
+        let epoch = p.ring.epoch();
+        for i in 0..6u64 {
+            let frame = VideoFrame {
+                pts: Duration::from_millis(16 * i + 16), // todos "tempranos" vs reloj 0
+                width: 4,
+                height: 4,
+                pixels: vec![0u8; crate::core::video::ring::expected_bytes(4, 4)],
+            };
+            assert!(p.ring.push(epoch, frame), "el ring debe aceptar 6 frames");
+        }
+        assert_eq!(p.ring.len(), 6);
+
+        // Reloj congelado en 0: ningún frame alcanza al reloj.
+        let presented = p.tick(Instant::now());
+        assert!(
+            presented.is_some(),
+            "ring lleno + reloj congelado debe presentar el frame más viejo"
+        );
+        assert!(p.ring.len() < 6, "el ring debe drenar");
     }
 
     #[test]

@@ -281,6 +281,13 @@ impl FrameRing {
         self.len() == 0
     }
 
+    /// Slots del ring. La UI lo usa como garantía de progreso: con el ring
+    /// lleno, un frame "temprano" se presenta igual en vez de esperar un
+    /// reloj que podría estar congelado.
+    pub fn capacity(&self) -> usize {
+        self.lock().capacity
+    }
+
     pub fn is_full(&self) -> bool {
         let inner = self.lock();
         inner.frames.len() >= inner.capacity
