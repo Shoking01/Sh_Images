@@ -193,6 +193,16 @@ impl VideoPlayer {
         self.shared().audio_sample_rate
     }
 
+    /// Diagnóstico: reloj maestro crudo (frames consumidos por el dispositivo).
+    pub fn audio_frames_played(&self) -> u64 {
+        self.audio.frames_played()
+    }
+
+    /// Diagnóstico: base del reloj de audio (último salto).
+    pub fn audio_seek_base(&self) -> Duration {
+        self.shared().seek_base
+    }
+
     fn shared(&self) -> std::sync::MutexGuard<'_, Shared> {
         self.shared.lock().unwrap_or_else(|p| p.into_inner())
     }

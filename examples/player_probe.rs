@@ -34,21 +34,23 @@ fn main() {
     while t0.elapsed() < Duration::from_secs(6) {
         std::thread::sleep(Duration::from_millis(200));
         let now = Instant::now();
-        let (snap, audio_len, ring_len, rate) = {
+        let (snap, audio_len, ring_len, rate, fp, base) = {
             let p = player.lock().unwrap();
             (
                 p.snapshot(now),
                 p.audio_len(),
                 p.ring_len(),
                 p.audio_sample_rate(),
+                p.audio_frames_played(),
+                p.audio_seek_base(),
             )
         };
         println!(
-            "t={:.1}s pos={:.2}s state={:?} ready={} audio_q={audio_len} ring={ring_len} rate={rate} presented_err={:?}",
+            "t={:.1}s pos={:.2}s state={:?} audio_q={audio_len} ring={ring_len} rate={rate} fp={fp} base={:.2}s err={:?}",
             t0.elapsed().as_secs_f32(),
             snap.position.as_secs_f32(),
             snap.state,
-            player.lock().unwrap().is_ready(),
+            base.as_secs_f32(),
             snap.error,
         );
         if let Some(err) = snap.error {
