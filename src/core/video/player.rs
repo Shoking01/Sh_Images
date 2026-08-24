@@ -96,8 +96,26 @@ impl VideoPlayer {
     /// La apertura real ocurre en el hilo: esta función no bloquea, y los
     /// errores aparecen luego en `snapshot().error`.
     pub fn open(path: &Path, viewport: (u32, u32), volume: u8, autoplay: bool) -> Self {
+        // La frecuencia del dispositivo se consulta ANTES de dimensionar el
+        // buffer: con el rate real, el colchón de 1.5 s dura lo que dice durar
+        // también en dispositivos a 96 kHz (antes se dimensionaba siempre a
+        // 48 kHz y el margen real era la mitad o menos).
+        //
+        // El backend WASAPI de cpal inicializa COM en STA sobre el hilo que lo
+        // llama, así que la consulta corre en un hilo descartable para no
+        // dejar el hilo de UI en el apartamento equivocado. Cuesta unos pocos
+        // ms una sola vez por apertura.
+        let device_rate = std::thread::spawn(audio_sample_rate_probe)
+            .join()
+            .unwrap_or(0);
+        let buffer_rate = if device_rate == 0 {
+            48_000
+        } else {
+            device_rate
+        };
+
         let ring = Arc::new(FrameRing::new());
-        let audio = Arc::new(AudioBuffer::new(buffer_capacity(48_000, 2)));
+        let audio = Arc::new(AudioBuffer::new(buffer_capacity(buffer_rate, 2)));
         let shared = Arc::new(Mutex::new(Shared::default()));
         let shutdown = Arc::new(AtomicBool::new(false));
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -118,7 +136,15 @@ impl VideoPlayer {
                 .name("sh_images-video".to_string())
                 .spawn(move || {
                     decoder_thread(
-                        path, viewport, autoplay, ring, audio, shared, shutdown, cmd_rx,
+                        path,
+                        viewport,
+                        device_rate,
+                        autoplay,
+                        ring,
+                        audio,
+                        shared,
+                        shutdown,
+                        cmd_rx,
                     );
                 })
                 .ok()
@@ -393,15 +419,25 @@ impl VideoPlayer {
 
 impl Drop for VideoPlayer {
     fn drop(&mut self) {
-        // Parar antes de soltar: si no, dos videos seguidos solaparían audio y
-        // quedarían hilos con recursos COM vivos.
+        // Parar antes de soltar: si no, dos videos seguidos solaparían audio.
         self.shutdown.store(true, Ordering::Release);
         let _ = self.cmd_tx.send(PlayerCommand::Shutdown);
+        // Despertar al decodificador si está bloqueado en push y cortar la cola:
+        // ambas cosas son baratas y síncronas.
         self.ring.close();
+        // El join pesado (teardown del stream WASAPI + cierre del decodificador
+        // FFmpeg) corre en un hilo descartable: hacerlo aquí congelaba la UI en
+        // cada cambio rápido de video. Los Arcs de ring/audio/shared sobreviven
+        // en el hilo decodificador hasta que termina; este hilo sólo espera.
         if let Some(handle) = self.thread.take() {
-            if handle.join().is_err() {
-                tracing::warn!("el hilo de video terminó en pánico");
-            }
+            std::thread::Builder::new()
+                .name("sh_images-video-close".to_string())
+                .spawn(move || {
+                    if handle.join().is_err() {
+                        tracing::warn!("el hilo de video terminó en pánico");
+                    }
+                })
+                .ok();
         }
     }
 }
@@ -445,6 +481,7 @@ fn apply_seek(
 fn decoder_thread(
     path: PathBuf,
     viewport: (u32, u32),
+    audio_rate: u32,
     autoplay: bool,
     ring: Arc<FrameRing>,
     audio: Arc<AudioBuffer>,
@@ -452,18 +489,8 @@ fn decoder_thread(
     shutdown: Arc<AtomicBool>,
     cmd_rx: mpsc::Receiver<PlayerCommand>,
 ) {
-    // La frecuencia del dispositivo se consulta en un hilo aparte, y no aquí.
-    //
-    // El backend WASAPI de cpal llama a `CoInitializeEx` en modo STA sobre el
-    // hilo que lo usa; hacerlo antes que `MFStartup` dejaba este hilo en el
-    // apartamento equivocado y Media Foundation quiere MTA (se veía como
-    // `RPC_E_CHANGED_MODE` en cada apertura). El stream de audio sí se crea
-    // aquí después, ya con MF arrancado: para entonces COM está en MTA y cpal
-    // se adapta.
-    let audio_rate = std::thread::spawn(audio_sample_rate_probe)
-        .join()
-        .unwrap_or(0);
-
+    // El rate del dispositivo lo consulta `open` antes de crear el buffer
+    // (ver comentario ahí); llega listo por parámetro.
     let mut decoder = match backend::open(&path, viewport, audio_rate) {
         Ok(d) => d,
         Err(e) => {
