@@ -393,18 +393,22 @@ impl VideoPlayer {
         }
 
         let clock = self.position(now);
+        let frame_interval = self
+            .info()
+            .fps
+            .filter(|f| *f > 0.0)
+            .map(|f| Duration::from_secs_f32(1.0 / f))
+            .unwrap_or(Duration::from_millis(33))
+            .max(timeline::MIN_FRAME_INTERVAL);
+        let early_tolerance = frame_interval / 2;
         let mut presentable = None;
         while let Some(pts) = self.ring.peek_pts() {
             let decision = timeline::frame_decision(pts, clock, timeline::LATE_THRESHOLD);
             self.consecutive_drops =
                 timeline::update_drop_counter(self.consecutive_drops, decision);
             match decision {
-                FrameDecision::Wait(_) => {
-                    // Garantía de progreso: con el ring lleno, un frame
-                    // "temprano" se presenta igual. Esperar podría congelar la
-                    // imagen para siempre si el reloj maestro se quedó sin
-                    // audio (deadlock reloj↔ring ya observado).
-                    if self.ring.len() >= self.ring.capacity() {
+                FrameDecision::Wait(remaining) => {
+                    if remaining <= early_tolerance {
                         presentable = self.ring.try_pop();
                     }
                     break;
@@ -631,8 +635,15 @@ fn decoder_thread(
         // frames_played (reloj maestro) se congela y la UI nunca drena: el
         // video se clava en el primer segundo (observado con dispositivo
         // a 192 kHz).
-        let audio_low_watermark = audio.capacity() / 3;
-        let audio_hungry = audio.len() < audio_low_watermark;
+        // La marca de agua por la que el bus del audio pide avidez tiene que ser
+        // en tiempo, no en muestras: con dispositivos a 192 kHz, capacity/3 son
+        // ~170 ms de margen; un ring lleno tardaría poco en dejar al audio sin
+        // nada y armar el deadlock. 0.15 s es robusto en cualquier rate.
+        const AUDIO_LOW_SECONDS: f32 = 0.15;
+        let audio_low = ((audio.capacity() as f32
+            / crate::core::video::audio::AUDIO_BUFFER_SECONDS)
+            * AUDIO_LOW_SECONDS) as usize;
+        let audio_hungry = audio.len() < audio_low;
         if audio.is_full() || (ring.is_full() && !audio_hungry) {
             match cmd_rx.recv_timeout(Duration::from_millis(4)) {
                 Ok(PlayerCommand::Shutdown) => break,
@@ -645,6 +656,40 @@ fn decoder_thread(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
             continue;
+        }
+
+        // Throttle de video por PTS: no encolar si el frame más nuevo ya está
+        // >40 ms adelante del audio consumido. Sin esto, con el colchón de
+        // 1.5 s el decodificador corre segundos adelantado y tick ve siempre
+        // el próximo a +50 ms (tope) → 20 fps.
+        if let Some(newest) = ring.peek_newest_pts() {
+            let a_clock = {
+                let s = lock(&shared);
+                if s.info.has_audio && s.audio_sample_rate > 0 {
+                    crate::core::video::clock::audio_position(
+                        s.seek_base,
+                        audio.frames_played(),
+                        s.audio_sample_rate,
+                        Duration::ZERO,
+                    )
+                } else {
+                    Duration::ZERO
+                }
+            };
+            if newest.saturating_sub(a_clock) > Duration::from_millis(40) {
+                match cmd_rx.recv_timeout(Duration::from_millis(4)) {
+                    Ok(PlayerCommand::SeekTo(t)) => {
+                        apply_seek(&mut decoder, &audio, &shared, &mut seek_target, t);
+                    }
+                    Ok(PlayerCommand::Play) => playing = true,
+                    Ok(PlayerCommand::Pause) => playing = false,
+                    Ok(PlayerCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        break
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+                continue;
+            }
         }
 
         let epoch = ring.epoch();
@@ -660,7 +705,7 @@ fn decoder_thread(
                 // el ring está lleno, el frame de video se sacrifica (píxeles
                 // reciclados) en vez de bloquear el hilo: el audio tiene
                 // prioridad porque ES el reloj maestro.
-                if ring.is_full() && audio.len() < audio.capacity() / 3 {
+                if ring.is_full() && audio.len() < audio_low {
                     let expected = frame.pixels.len();
                     ring.recycle(frame.pixels, expected);
                     continue;

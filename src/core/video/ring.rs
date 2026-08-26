@@ -246,6 +246,18 @@ impl FrameRing {
             .map(|(_, f)| f.pts)
     }
 
+    /// Marca temporal del frame más nuevo en cola (de la misma época), sin sacarlo.
+    pub fn peek_newest_pts(&self) -> Option<Duration> {
+        let inner = self.lock();
+        let current = self.epoch();
+        inner
+            .frames
+            .iter()
+            .rev()
+            .find(|(e, _)| *e == current)
+            .map(|(_, f)| f.pts)
+    }
+
     /// Devuelve una asignación tras subir el frame a la GPU.
     ///
     /// Buffers de tamaño distinto al actual no se guardan: no sirven tras un

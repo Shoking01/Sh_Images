@@ -15,12 +15,9 @@ pub const RAMP_SECONDS: f32 = 0.015;
 
 /// Segundos de audio que se mantienen en cola como colchón.
 ///
-/// Subido de 0.5 a 1.5 s: con 0.5 s, un hipo del consumidor de frames de
-/// video (repintado de la UI) que superase ese margen vaciaba el buffer
-/// antes de que el decodificador se pusiera al día, y sonaba como un
-/// petardeo. 1.5 s da mucho más margen sin notarse en la latencia de
-/// arranque ni en los saltos (el buffer se vacía con `AudioBuffer::flush`).
-pub const AUDIO_BUFFER_SECONDS: f32 = 1.5;
+/// 0.25 s mantiene audio continuo sin dejar el video adelantado; 1.5 s
+/// dejaba el decoder 1.5 s adelante y el pacing caía a 20 fps.
+pub const AUDIO_BUFFER_SECONDS: f32 = 0.25;
 
 /// Coeficiente del filtro de un polo que suaviza el cambio de ganancia.
 pub fn ramp_coefficient(sample_rate: u32) -> f32 {
@@ -272,11 +269,11 @@ mod tests {
 
     #[test]
     fn buffer_capacity_scales_with_rate_and_channels() {
-        // 48 000 Hz × 1.5 s = 72 000 frames por canal.
-        assert_eq!(buffer_capacity(48_000, 2), 144_000);
-        assert_eq!(buffer_capacity(48_000, 1), 72_000);
+        // 48 000 Hz × 0.25 s = 12 000 frames por canal.
+        assert_eq!(buffer_capacity(48_000, 2), 24_000);
+        assert_eq!(buffer_capacity(48_000, 1), 12_000);
         // channels = 0 se trata como 1 en vez de dar capacidad cero.
-        assert_eq!(buffer_capacity(48_000, 0), 72_000);
+        assert_eq!(buffer_capacity(48_000, 0), 12_000);
     }
 
     #[test]
