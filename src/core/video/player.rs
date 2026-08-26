@@ -96,8 +96,26 @@ impl VideoPlayer {
     /// La apertura real ocurre en el hilo: esta función no bloquea, y los
     /// errores aparecen luego en `snapshot().error`.
     pub fn open(path: &Path, viewport: (u32, u32), volume: u8, autoplay: bool) -> Self {
+        // La frecuencia del dispositivo se consulta ANTES de dimensionar el
+        // buffer: con el rate real, el colchón de 1.5 s dura lo que dice durar
+        // también en dispositivos a 96 kHz (antes se dimensionaba siempre a
+        // 48 kHz y el margen real era la mitad o menos).
+        //
+        // El backend WASAPI de cpal inicializa COM en STA sobre el hilo que lo
+        // llama, así que la consulta corre en un hilo descartable para no
+        // dejar el hilo de UI en el apartamento equivocado. Cuesta unos pocos
+        // ms una sola vez por apertura.
+        let device_rate = std::thread::spawn(audio_sample_rate_probe)
+            .join()
+            .unwrap_or(0);
+        let buffer_rate = if device_rate == 0 {
+            48_000
+        } else {
+            device_rate
+        };
+
         let ring = Arc::new(FrameRing::new());
-        let audio = Arc::new(AudioBuffer::new(buffer_capacity(48_000, 2)));
+        let audio = Arc::new(AudioBuffer::new(buffer_capacity(buffer_rate, 2)));
         let shared = Arc::new(Mutex::new(Shared::default()));
         let shutdown = Arc::new(AtomicBool::new(false));
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -118,7 +136,15 @@ impl VideoPlayer {
                 .name("sh_images-video".to_string())
                 .spawn(move || {
                     decoder_thread(
-                        path, viewport, autoplay, ring, audio, shared, shutdown, cmd_rx,
+                        path,
+                        viewport,
+                        device_rate,
+                        autoplay,
+                        ring,
+                        audio,
+                        shared,
+                        shutdown,
+                        cmd_rx,
                     );
                 })
                 .ok()
@@ -150,6 +176,31 @@ impl VideoPlayer {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Diagnóstico: muestras estéreo encoladas en el buffer de audio.
+    pub fn audio_len(&self) -> usize {
+        self.audio.len()
+    }
+
+    /// Diagnóstico: frames de video en el ring.
+    pub fn ring_len(&self) -> usize {
+        self.ring.len()
+    }
+
+    /// Diagnóstico: rate del dispositivo de salida (0 = desconocido).
+    pub fn audio_sample_rate(&self) -> u32 {
+        self.shared().audio_sample_rate
+    }
+
+    /// Diagnóstico: reloj maestro crudo (frames consumidos por el dispositivo).
+    pub fn audio_frames_played(&self) -> u64 {
+        self.audio.frames_played()
+    }
+
+    /// Diagnóstico: base del reloj de audio (último salto).
+    pub fn audio_seek_base(&self) -> Duration {
+        self.shared().seek_base
     }
 
     fn shared(&self) -> std::sync::MutexGuard<'_, Shared> {
@@ -342,13 +393,26 @@ impl VideoPlayer {
         }
 
         let clock = self.position(now);
+        let frame_interval = self
+            .info()
+            .fps
+            .filter(|f| *f > 0.0)
+            .map(|f| Duration::from_secs_f32(1.0 / f))
+            .unwrap_or(Duration::from_millis(33))
+            .max(timeline::MIN_FRAME_INTERVAL);
+        let early_tolerance = frame_interval / 2;
         let mut presentable = None;
         while let Some(pts) = self.ring.peek_pts() {
             let decision = timeline::frame_decision(pts, clock, timeline::LATE_THRESHOLD);
             self.consecutive_drops =
                 timeline::update_drop_counter(self.consecutive_drops, decision);
             match decision {
-                FrameDecision::Wait(_) => break,
+                FrameDecision::Wait(remaining) => {
+                    if remaining <= early_tolerance {
+                        presentable = self.ring.try_pop();
+                    }
+                    break;
+                }
                 FrameDecision::Present => {
                     presentable = self.ring.try_pop();
                     break;
@@ -393,15 +457,25 @@ impl VideoPlayer {
 
 impl Drop for VideoPlayer {
     fn drop(&mut self) {
-        // Parar antes de soltar: si no, dos videos seguidos solaparían audio y
-        // quedarían hilos con recursos COM vivos.
+        // Parar antes de soltar: si no, dos videos seguidos solaparían audio.
         self.shutdown.store(true, Ordering::Release);
         let _ = self.cmd_tx.send(PlayerCommand::Shutdown);
+        // Despertar al decodificador si está bloqueado en push y cortar la cola:
+        // ambas cosas son baratas y síncronas.
         self.ring.close();
+        // El join pesado (teardown del stream WASAPI + cierre del decodificador
+        // FFmpeg) corre en un hilo descartable: hacerlo aquí congelaba la UI en
+        // cada cambio rápido de video. Los Arcs de ring/audio/shared sobreviven
+        // en el hilo decodificador hasta que termina; este hilo sólo espera.
         if let Some(handle) = self.thread.take() {
-            if handle.join().is_err() {
-                tracing::warn!("el hilo de video terminó en pánico");
-            }
+            std::thread::Builder::new()
+                .name("sh_images-video-close".to_string())
+                .spawn(move || {
+                    if handle.join().is_err() {
+                        tracing::warn!("el hilo de video terminó en pánico");
+                    }
+                })
+                .ok();
         }
     }
 }
@@ -445,6 +519,7 @@ fn apply_seek(
 fn decoder_thread(
     path: PathBuf,
     viewport: (u32, u32),
+    audio_rate: u32,
     autoplay: bool,
     ring: Arc<FrameRing>,
     audio: Arc<AudioBuffer>,
@@ -452,18 +527,8 @@ fn decoder_thread(
     shutdown: Arc<AtomicBool>,
     cmd_rx: mpsc::Receiver<PlayerCommand>,
 ) {
-    // La frecuencia del dispositivo se consulta en un hilo aparte, y no aquí.
-    //
-    // El backend WASAPI de cpal llama a `CoInitializeEx` en modo STA sobre el
-    // hilo que lo usa; hacerlo antes que `MFStartup` dejaba este hilo en el
-    // apartamento equivocado y Media Foundation quiere MTA (se veía como
-    // `RPC_E_CHANGED_MODE` en cada apertura). El stream de audio sí se crea
-    // aquí después, ya con MF arrancado: para entonces COM está en MTA y cpal
-    // se adapta.
-    let audio_rate = std::thread::spawn(audio_sample_rate_probe)
-        .join()
-        .unwrap_or(0);
-
+    // El rate del dispositivo lo consulta `open` antes de crear el buffer
+    // (ver comentario ahí); llega listo por parámetro.
     let mut decoder = match backend::open(&path, viewport, audio_rate) {
         Ok(d) => d,
         Err(e) => {
@@ -562,7 +627,24 @@ fn decoder_thread(
         // obsoletos y se descartan, dejando el ring vacío y la imagen
         // congelada aunque el audio siga avanzando. El ring necesita seguir
         // frenando el decode para mantenerse cerca del tiempo real.
-        if ring.is_full() || (info.has_audio && audio.is_full()) {
+        //
+        // EXCEPCIÓN que rompe el deadlock reloj↔ring: si la cola de audio
+        // está por debajo de la marca de agua baja, se sigue decodificando
+        // AUNQUE el ring esté lleno. Si no, el video priorizado llena el
+        // ring antes de que el audio fluya, el callback se queda sin nada,
+        // frames_played (reloj maestro) se congela y la UI nunca drena: el
+        // video se clava en el primer segundo (observado con dispositivo
+        // a 192 kHz).
+        // La marca de agua por la que el bus del audio pide avidez tiene que ser
+        // en tiempo, no en muestras: con dispositivos a 192 kHz, capacity/3 son
+        // ~170 ms de margen; un ring lleno tardaría poco en dejar al audio sin
+        // nada y armar el deadlock. 0.15 s es robusto en cualquier rate.
+        const AUDIO_LOW_SECONDS: f32 = 0.15;
+        let audio_low = ((audio.capacity() as f32
+            / crate::core::video::audio::AUDIO_BUFFER_SECONDS)
+            * AUDIO_LOW_SECONDS) as usize;
+        let audio_hungry = audio.len() < audio_low;
+        if audio.is_full() || (ring.is_full() && !audio_hungry) {
             match cmd_rx.recv_timeout(Duration::from_millis(4)) {
                 Ok(PlayerCommand::Shutdown) => break,
                 Ok(PlayerCommand::Play) => playing = true,
@@ -576,6 +658,40 @@ fn decoder_thread(
             continue;
         }
 
+        // Throttle de video por PTS: no encolar si el frame más nuevo ya está
+        // >40 ms adelante del audio consumido. Sin esto, con el colchón de
+        // 1.5 s el decodificador corre segundos adelantado y tick ve siempre
+        // el próximo a +50 ms (tope) → 20 fps.
+        if let Some(newest) = ring.peek_newest_pts() {
+            let a_clock = {
+                let s = lock(&shared);
+                if s.info.has_audio && s.audio_sample_rate > 0 {
+                    crate::core::video::clock::audio_position(
+                        s.seek_base,
+                        audio.frames_played(),
+                        s.audio_sample_rate,
+                        Duration::ZERO,
+                    )
+                } else {
+                    Duration::ZERO
+                }
+            };
+            if newest.saturating_sub(a_clock) > Duration::from_millis(40) {
+                match cmd_rx.recv_timeout(Duration::from_millis(4)) {
+                    Ok(PlayerCommand::SeekTo(t)) => {
+                        apply_seek(&mut decoder, &audio, &shared, &mut seek_target, t);
+                    }
+                    Ok(PlayerCommand::Play) => playing = true,
+                    Ok(PlayerCommand::Pause) => playing = false,
+                    Ok(PlayerCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        break
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+                continue;
+            }
+        }
+
         let epoch = ring.epoch();
         match decoder.next_sample() {
             Ok(Sample::Video(frame)) => {
@@ -584,6 +700,16 @@ fn decoder_thread(
                 // lo que mantiene al decodificador cerca del ritmo real. Ver
                 // el comentario del gate de contrapresión más arriba sobre
                 // por qué `try_push` (sin bloquear) resultó peor, no mejor.
+                //
+                // EXCEPCIÓN (deadlock reloj↔ring): si el audio pasa hambre y
+                // el ring está lleno, el frame de video se sacrifica (píxeles
+                // reciclados) en vez de bloquear el hilo: el audio tiene
+                // prioridad porque ES el reloj maestro.
+                if ring.is_full() && audio.len() < audio_low {
+                    let expected = frame.pixels.len();
+                    ring.recycle(frame.pixels, expected);
+                    continue;
+                }
                 if !ring.push(epoch, frame) && ring.is_closed() {
                     break;
                 }
@@ -818,6 +944,34 @@ mod tests {
         let now = Instant::now();
         p.seek_backward(now);
         assert_eq!(p.pending_seek, Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn tick_with_full_ring_always_makes_progress_even_with_frozen_clock() {
+        // Deadlock reloj↔ring: con el reloj maestro congelado (sin audio), el
+        // segundo frame (16 ms adelante) sería "Wait" eterno y el ring lleno
+        // no drenaría jamás. La garantía de progreso presenta el más viejo.
+        let mut p = player_for("no_existe_98765.mp4");
+        // El hilo decodificador murió ya (stub); el ring lo llenamos a mano.
+        let epoch = p.ring.epoch();
+        for i in 0..6u64 {
+            let frame = VideoFrame {
+                pts: Duration::from_millis(16 * i + 16), // todos "tempranos" vs reloj 0
+                width: 4,
+                height: 4,
+                pixels: vec![0u8; crate::core::video::ring::expected_bytes(4, 4)],
+            };
+            assert!(p.ring.push(epoch, frame), "el ring debe aceptar 6 frames");
+        }
+        assert_eq!(p.ring.len(), 6);
+
+        // Reloj congelado en 0: ningún frame alcanza al reloj.
+        let presented = p.tick(Instant::now());
+        assert!(
+            presented.is_some(),
+            "ring lleno + reloj congelado debe presentar el frame más viejo"
+        );
+        assert!(p.ring.len() < 6, "el ring debe drenar");
     }
 
     #[test]

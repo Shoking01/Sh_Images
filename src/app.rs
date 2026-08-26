@@ -414,6 +414,39 @@ impl ShImagesApp {
         let Some(player) = self.video.as_mut() else {
             return;
         };
+        // Diagnóstico temporal (SH_IMAGES_VIDEO_DEBUG_LOG=1): traza el estado
+        // del reproductor cada 500 ms a %TEMP%\sh_images_video_debug.log para
+        // cazar desfases que solo ocurren dentro de la UI real.
+        if std::env::var("SH_IMAGES_VIDEO_DEBUG_LOG").is_ok() {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static LAST_LOG_MS: AtomicU64 = AtomicU64::new(0);
+            let ms = now.elapsed().as_millis() as u64;
+            let last = LAST_LOG_MS.load(Ordering::Relaxed);
+            if ms.saturating_sub(last) > 500 {
+                LAST_LOG_MS.store(ms, Ordering::Relaxed);
+                let snap = player.snapshot(now);
+                let log = format!(
+                    "[ui-tick] pos={:.3} state={:?} fp={} audio_q={} ring={} base={:.3} rate={} ready={} err={:?}\n",
+                    snap.position.as_secs_f32(),
+                    snap.state,
+                    player.audio_frames_played(),
+                    player.audio_len(),
+                    player.ring_len(),
+                    player.audio_seek_base().as_secs_f32(),
+                    player.audio_sample_rate(),
+                    player.is_ready(),
+                    snap.error,
+                );
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(std::env::temp_dir().join("sh_images_video_debug.log"))
+                {
+                    use std::io::Write;
+                    let _ = f.write_all(log.as_bytes());
+                }
+            }
+        }
         let frame = player.tick(now);
         let wait = player.repaint_after(now);
         if let Some(frame) = frame {

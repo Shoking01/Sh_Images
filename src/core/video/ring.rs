@@ -246,6 +246,18 @@ impl FrameRing {
             .map(|(_, f)| f.pts)
     }
 
+    /// Marca temporal del frame más nuevo en cola (de la misma época), sin sacarlo.
+    pub fn peek_newest_pts(&self) -> Option<Duration> {
+        let inner = self.lock();
+        let current = self.epoch();
+        inner
+            .frames
+            .iter()
+            .rev()
+            .find(|(e, _)| *e == current)
+            .map(|(_, f)| f.pts)
+    }
+
     /// Devuelve una asignación tras subir el frame a la GPU.
     ///
     /// Buffers de tamaño distinto al actual no se guardan: no sirven tras un
@@ -279,6 +291,13 @@ impl FrameRing {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Slots del ring. La UI lo usa como garantía de progreso: con el ring
+    /// lleno, un frame "temprano" se presenta igual en vez de esperar un
+    /// reloj que podría estar congelado.
+    pub fn capacity(&self) -> usize {
+        self.lock().capacity
     }
 
     pub fn is_full(&self) -> bool {

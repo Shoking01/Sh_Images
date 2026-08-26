@@ -53,8 +53,7 @@ video = ["dep:ffmpeg-next"]
 hwaccel = ["video"]
 
 [dependencies]
-once_cell = "1.19"
-# FFmpeg 7.x dynamic LGPL — Slice1 SW decode. Optional so `cargo test` without
+once_cell = "1.19"# FFmpeg 7.x dynamic LGPL — Slice1 SW decode. Optional so `cargo test` without
 # FFmpeg dev libs still passes; `cargo test --features video` probes real DLLs.
 # Minimal feature set: default pulls avfilter+avdevice which we never use and
 # whose .pc files would be required at build time (CI video-decode failure).
@@ -129,3 +128,10 @@ windows = { version = "0.62", features = [
 # Salida de audio (WASAPI en Windows) — licencia Apache-2.0, estándar del
 # ecosistema. El volumen se aplica escalando PCM, no tocando el mezclador.
 cpal = "0.16"
+
+# Vendored ffmpeg-sys-next: layout_tests(false) — on MSVC a few FFmpeg structs
+# fall back to opaque in bindgen and the default layout asserts fail with E0080.
+# See vendor/ffmpeg-sys-next/build.rs and docs/licenses.md. Harmless on CI/Linux
+# (asserts are ABI drift checks, not correctness).
+[patch.crates-io]
+ffmpeg-sys-next = { path = "vendor/ffmpeg-sys-next" }

@@ -664,6 +664,13 @@ impl FfmpegDecoder {
         let src_w = v_decoder.width();
         let src_h = v_decoder.height();
 
+        // Decode target derived from the REAL source dims via ring::output_size
+        // (uniform scale, never upscale, capped at 1080p) — NOT the raw viewport.
+        // Storing the viewport verbatim stretched e.g. a 16:9 source into the
+        // window's aspect; this restores the old MF backend's contract. The
+        // per-axis clamps in `video_sample` become a no-op safety net.
+        let decode_size = decode_output_size((src_w, src_h), output_size);
+
         let fps = fps_from_rational(avg_fps.numerator(), avg_fps.denominator())
             .or_else(|| fps_from_rational(r_fps.numerator(), r_fps.denominator()));
         let duration = duration_from_av_micros(container_micros).or_else(|| {
@@ -712,7 +719,7 @@ impl FfmpegDecoder {
 
         Ok(Self {
             info,
-            output_size,
+            output_size: decode_size,
             audio_rate,
             video_only,
             duration,
@@ -1256,6 +1263,18 @@ pub fn hw_active(ctx: Option<HwContext>) -> bool {
 // Work-unit pure helpers exported for tests.
 // ---------------------------------------------------------------------------
 
+/// Decode target resolution for a source of `src` dimensions opened with a
+/// `viewport` request.
+///
+/// Wraps [`super::ring::output_size`] (uniform scale, never upscales, capped
+/// at 1920x1080) so the open path can derive the scaler geometry from the REAL
+/// source dimensions instead of storing the raw viewport verbatim — which
+/// stretched e.g. 16:9 sources to whatever box the window happened to have.
+/// Pure and unit-testable without FFmpeg FFI.
+pub fn decode_output_size(src: (u32, u32), viewport: (u32, u32)) -> (u32, u32) {
+    super::ring::output_size((src.0.max(1), src.1.max(1)), viewport)
+}
+
 /// Exposed for `set_output_size` hysteresis test (wraps ring::should_renegotiate).
 pub fn should_renegotiate_output(current: (u32, u32), desired: (u32, u32)) -> bool {
     should_renegotiate(current, desired)
@@ -1338,6 +1357,31 @@ mod tests {
         let uv = vec![0u8; 4];
         let err = yuv420p_to_rgba(&y, &uv, &uv, 3, 3).unwrap_err();
         assert!(matches!(err, ShImagesError::Media(_)));
+    }
+
+    // ---- Aspect ratio: decode target must follow SOURCE dims, not viewport ----
+
+    #[test]
+    fn decode_output_size_preserves_aspect_ratio_inside_the_viewport() {
+        // Regression: open_real used to store the requested viewport verbatim
+        // as the scaler destination, stretching a 16:9 source into e.g. an
+        // 800x600 (4:3) window. The old MF backend scaled uniformly via
+        // ring::output_size; the FFmpeg backend must match.
+        assert_eq!(decode_output_size((1920, 1080), (800, 600)), (800, 450));
+    }
+
+    #[test]
+    fn decode_output_size_caps_at_1080p_and_never_upscales() {
+        assert_eq!(decode_output_size((3840, 2160), (3840, 2160)), (1920, 1080));
+        assert_eq!(decode_output_size((640, 480), (1920, 1080)), (640, 480));
+    }
+
+    #[test]
+    fn decode_output_size_survives_degenerate_source_dimensions() {
+        // Containers with missing/zero dimensions must not panic or yield zero.
+        assert!(decode_output_size((0, 0), (800, 600)).1 > 0);
+        let (w, h) = decode_output_size((0, 1080), (800, 600));
+        assert!(w >= 2 && h >= 2);
     }
 
     #[test]
